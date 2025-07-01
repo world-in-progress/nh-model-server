@@ -1,0 +1,13 @@
+[project]
+name = "nh-model-server"
+version = "0.1.0"
+description = "Model Server for NH"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "c-two>=0.1.20",
+    "fastapi>=0.115.13",
+]
+
+[tool.uv.sources]
+c-two = { git = "https://github.com/world-in-progress/c-two.git", branch = "main" }
