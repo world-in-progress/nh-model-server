@@ -54,7 +54,7 @@ class Gate:
 class SolutionData:
     ne: NeData
     ns: NsData
-    imp: str
+    inp: str
     rainfall: RainfallData
     gate: Gate
     tide: TideData
@@ -63,7 +63,7 @@ class CreateSolutionBody(BaseModel):
     name: str
     ne_path: str
     ns_path: str
-    imp_path: str
+    inp_path: str
     rainfall_path: str
     gate_path: str
     tide_path: str
@@ -72,7 +72,7 @@ class CreateSolutionBody(BaseModel):
 class ISolution:
 
     # Model Server to Resource Server
-    def get_imp(self)-> str:
+    def get_inp(self)-> str:
         """
         获取模型参数
         :return: str
