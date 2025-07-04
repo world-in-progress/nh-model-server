@@ -1,7 +1,6 @@
 import os
 import json
 import time
-import threading
 from typing import Dict, Any
 import c_two as cc
 from icrms.isimulation import ISimulation, GridResult
@@ -14,31 +13,17 @@ class ResultMonitor:
         self.solution_name = solution_name
         self.simulation_name = simulation_name
         self.running = False
-        self.thread = None
         self.processed_files = set()
 
-    def start(self):
-        """启动监控线程"""
-        if self.running:
-            return
+    def run(self):
+        """以进程方式运行监控循环"""
         self.running = True
-        self.thread = threading.Thread(target=self._monitor_loop, daemon=True)
-        self.thread.start()
-
-    def stop(self):
-        """停止监控"""
-        self.running = False
-        if self.thread:
-            self.thread.join(timeout=5)
-
-    def _monitor_loop(self):
-        """监控循环"""
         while self.running:
             try:
                 self._check_result_files()
                 time.sleep(1)  # 每秒检查一次
             except Exception as e:
-                print(f"监控线程异常: {e}")
+                print(f"监控进程异常: {e}")
                 time.sleep(5)  # 异常时等待更长时间
 
     def _check_result_files(self):

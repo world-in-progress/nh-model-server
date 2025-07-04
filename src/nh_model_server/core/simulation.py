@@ -6,7 +6,6 @@ from src.nh_model_server.core.monitor import ResultMonitor
 class SimulationProcessManager:
     def __init__(self):
         self.processes = {}  # key: (solution_name, simulation_name), value: process
-        self.monitors = {}   # key: (solution_name, simulation_name), value: ResultMonitor
         self.lock = threading.Lock()
 
     def _get_key(self, solution_name, simulation_name):
@@ -31,14 +30,17 @@ class SimulationProcessManager:
             # )
             # flood_proc.start()
             # pipe_proc.start()
-            # self.processes[key] = {'flood': flood_proc, 'pipe': pipe_proc}
-
-            # 启动结果监控器
+            # monitor进程
+            procs = {}
+            # if you want to start flood/pipe, uncomment and add to procs dict
+            # procs['flood'] = flood_proc
+            # procs['pipe'] = pipe_proc
             if simulation_address:
                 monitor = ResultMonitor(resource_path, simulation_address, solution_name, simulation_name)
-                monitor.start()
-                self.monitors[key] = monitor
-
+                monitor_proc = multiprocessing.Process(target=monitor.run)
+                monitor_proc.start()
+                procs['monitor'] = monitor_proc
+            self.processes[key] = procs
             return True
 
     def stop(self, solution_name, simulation_name):
@@ -52,13 +54,6 @@ class SimulationProcessManager:
                         proc.terminate()
                         proc.join()
                 del self.processes[key]
-
-            # 停止监控器
-            monitor = self.monitors.get(key)
-            if monitor:
-                monitor.stop()
-                del self.monitors[key]
-
             return True
 
     def stop_all(self):
@@ -71,11 +66,6 @@ class SimulationProcessManager:
                         proc.terminate()
                         proc.join()
             self.processes.clear()
-
-            # 停止所有监控器
-            for key, monitor in list(self.monitors.items()):
-                monitor.stop()
-            self.monitors.clear()
 
     # 可以扩展 rollback, pause, resume 等方法，参数同理加上 key
 
