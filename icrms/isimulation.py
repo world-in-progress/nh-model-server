@@ -3,6 +3,8 @@ from enum import Enum
 from pydantic import BaseModel
 from typing import Union, Any
 
+from nh_resource_server.schemas import feature
+
 class CreateSimulationBody(BaseModel):
     name: str
     solution_name: str
@@ -22,6 +24,11 @@ class AddFenceParams(BaseModel):
     elevation_delta: float | None = None
     landuse_type: LanduseType | None = None
     feature: dict[str, Any]
+    
+class FenceParams(BaseModel):
+    elevation_delta: float | None = None
+    landuse_type: LanduseType | None = None
+    grid_id_list: list[int]
 
 class TransferWaterParams(BaseModel):
     from_grid: int
@@ -29,14 +36,18 @@ class TransferWaterParams(BaseModel):
     q: float  # 通量
 
 class AddGateParams(BaseModel):
-    gate_num: int
-    grid_id_list: list[int]
     ud_stream: int
     gate_height: int
+    feature: dict[str, Any]
+    
+class GateParams(BaseModel):
+    ud_stream: int
+    gate_height: int
+    grid_id_list: list[int]
 
 class HumanAction(BaseModel):
     action_type: ActionType
-    params: Union[AddFenceParams, TransferWaterParams, AddGateParams]
+    params: Union[AddFenceParams, TransferWaterParams, AddGateParams, FenceParams, GateParams]
 
 class GridResult(BaseModel):
     grid_id: int
