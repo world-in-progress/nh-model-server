@@ -3,8 +3,6 @@ from enum import Enum
 from pydantic import BaseModel
 from typing import Union, Any
 
-from nh_resource_server.schemas import feature
-
 class CreateSimulationBody(BaseModel):
     name: str
     solution_name: str
