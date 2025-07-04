@@ -23,14 +23,12 @@ class NeData:
 @dataclass
 class NsData:
     edge_id_list: list[int]
-    ise_list: list[int]
+    ise_list: list[list[int]]
     dis_list: list[float]
     x_side_list: list[float]
     y_side_list: list[float]
     z_side_list: list[float]
-    under_suf_list: list[int]
-    nbd_ie_list: list[int]
-    ibd_ie_list: list[int]
+    s_type_list: list[int]
 
 @dataclass
 class RainfallData:
