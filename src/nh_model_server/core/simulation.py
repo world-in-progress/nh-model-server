@@ -7,12 +7,11 @@ from src.nh_model_server.core.monitor import ResultMonitor
 from model.coupled_0703.Flood_new import run_flood
 from model.coupled_0703.pipe_NH import run_pipe_simulation
 
-_global_manager = multiprocessing.Manager()
-
 class SimulationProcessManager:
     def __init__(self):
         self.processes = {}  # key: (solution_name, simulation_name), value: process
         self.lock = threading.Lock()
+        self.managers = {}  # key: (solution_name, simulation_name), value: manager
 
     def _get_key(self, solution_name, simulation_name):
         return (solution_name, simulation_name)
@@ -30,7 +29,7 @@ class SimulationProcessManager:
             with open(inp_path, 'w', encoding='utf-8') as f:
                 f.write(inp_data)
             solution_data['inp_path'] = inp_path
-            shared = self.create_shared_memory()
+            shared = self.create_shared_memory(key)
             # 启动两个进程
             flood_proc = multiprocessing.Process(
                 target=run_flood,
@@ -65,6 +64,13 @@ class SimulationProcessManager:
                         proc.terminate()
                         proc.join()
                 del self.processes[key]
+            # 清理管理器
+            if key in self.managers:
+                try:
+                    self.managers[key].shutdown()
+                except:
+                    pass
+                del self.managers[key]
             return True
 
     def stop_all(self):
@@ -77,11 +83,20 @@ class SimulationProcessManager:
                         proc.terminate()
                         proc.join()
             self.processes.clear()
+            # 清理所有管理器
+            for key, manager in list(self.managers.items()):
+                try:
+                    manager.shutdown()
+                except:
+                    pass
+            self.managers.clear()
 
     # 可以扩展 rollback, pause, resume 等方法，参数同理加上 key
 
-    def create_shared_memory(self):
-        manager = _global_manager
+    def create_shared_memory(self, key):
+        # 为每个进程组创建独立的管理器
+        manager = multiprocessing.Manager()
+        self.managers[key] = manager
         return {
             '1d_data': manager.dict(),       # 模型输出数据
             '2d_data': manager.dict(),
