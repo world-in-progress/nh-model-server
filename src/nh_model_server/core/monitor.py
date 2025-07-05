@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Set, Tuple
 import c_two as cc
 from icrms.isimulation import ISimulation, GridResult
 
@@ -13,7 +13,9 @@ class ResultMonitor:
         self.solution_name = solution_name
         self.simulation_name = simulation_name
         self.running = False
-        self.processed_files = set()
+        self.processed_steps = set()  # 已处理过的step
+        self.step_files = {}  # step: set of file types 已到达的文件类型
+        self.file_types = ['result', 'flood_nodes', 'hsf']
 
     def run(self):
         """以进程方式运行监控循环"""
@@ -31,79 +33,85 @@ class ResultMonitor:
         if not os.path.exists(self.resource_path):
             return
 
+        # 遍历所有.done文件，按step归类
         for filename in os.listdir(self.resource_path):
-            if filename.endswith('.done') and filename not in self.processed_files:
-                result_file = filename[:-5]  # 移除.done后缀
-                result_path = os.path.join(self.resource_path, result_file)
-                
-                if os.path.exists(result_path):
-                    self._process_result_file(result_path, result_file)
-                    self.processed_files.add(filename)
+            if filename.endswith('.done'):
+                for file_type in self.file_types:
+                    prefix = f'{file_type}_'
+                    if filename.startswith(prefix):
+                        try:
+                            step = int(filename[len(prefix):-5])  # 去掉前缀和.done
+                        except Exception:
+                            continue
+                        if step not in self.step_files:
+                            self.step_files[step] = set()
+                        self.step_files[step].add(file_type)
+                        break
 
-    def _process_result_file(self, result_path: str, result_file: str):
-        """处理结果文件"""
+        # 检查哪些step三种类型都到齐且未处理
+        for step, types in list(self.step_files.items()):
+            if step in self.processed_steps:
+                continue
+            if all(t in types for t in self.file_types):
+                self._process_step(step)
+                self.processed_steps.add(step)
+
+    def _process_step(self, step: int):
+        """处理某个step的所有结果文件"""
         try:
-            # 解析文件名获取step信息
-            # 假设文件名格式为: result_step_xxx.json 或类似格式
-            step = self._extract_step_from_filename(result_file)
-            
-            # 读取结果文件
-            with open(result_path, 'r', encoding='utf-8') as f:
-                result_data = json.load(f)
-            
-            # 转换为GridResult对象列表
-            grid_results = self._parse_result_data(result_data)
-            
-            # 获取高亮网格（如果有的话）
-            highlight_grids = result_data.get('highlight_grids', [])
-            
-            # 调用ISimulation接口发送结果
-            self._send_result_to_simulation(step, grid_results, highlight_grids)
-            
-            print(f"已处理结果文件: {result_file}, step: {step}")
-            
+            # 文件类型与后缀名映射
+            file_suffix = {
+                'result': '.dat',
+                'flood_nodes': '.txt',
+                'hsf': '.hsf',
+            }
+            # 读取 result（dat文件为逐行文本，每行一个GridResult，字段顺序：grid_id, water_level, u, v, depth）
+            result_file = os.path.join(self.resource_path, f"result_{step}{file_suffix['result']}")
+            if not os.path.exists(result_file):
+                print(f"缺少数据文件: {result_file}")
+                return
+            results = []
+            with open(result_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.strip():
+                        parts = line.strip().split()
+                        if len(parts) >= 5:
+                            grid_result = GridResult(
+                                grid_id=int(parts[0]),
+                                water_level=float(parts[1]),
+                                u=float(parts[2]),
+                                v=float(parts[3]),
+                                depth=float(parts[4])
+                            )
+                            results.append(grid_result)
+
+            # 读取 flood_nodes
+            flood_nodes_file = os.path.join(self.resource_path, f"flood_nodes_{step}{file_suffix['flood_nodes']}")
+            if not os.path.exists(flood_nodes_file):
+                print(f"缺少数据文件: {flood_nodes_file}")
+                return
+            with open(flood_nodes_file, 'r', encoding='utf-8') as f:
+                flood_nodes_data = [int(line.strip()) for line in f if line.strip()]
+
+            # 读取 hsf
+            hsf_file = os.path.join(self.resource_path, f"hsf_{step}{file_suffix['hsf']}")
+            if not os.path.exists(hsf_file):
+                print(f"缺少数据文件: {hsf_file}")
+                return
+            with open(hsf_file, 'rb') as f:
+                hsf_data = f.read()
+
+            self._send_result_to_simulation(step, results, flood_nodes_data, hsf_data)
+            print(f"已处理step: {step}")
         except Exception as e:
-            print(f"处理结果文件 {result_file} 时出错: {e}")
+            print(f"处理step {step} 时出错: {e}")
 
-    def _extract_step_from_filename(self, filename: str) -> int:
-        """从文件名中提取step信息"""
-        # 这里需要根据实际的文件命名规则来实现
-        # 示例实现，假设文件名包含step信息
-        try:
-            # 假设文件名格式为: result_step_123.json
-            if 'step_' in filename:
-                step_part = filename.split('step_')[1].split('.')[0]
-                return int(step_part)
-            else:
-                # 如果没有明确的step信息，使用文件名作为step
-                return hash(filename) % 10000  # 简单的哈希值作为step
-        except:
-            return 0
-
-    def _parse_result_data(self, result_data: Dict[str, Any]) -> list[GridResult]:
-        """解析结果数据为GridResult对象列表"""
-        grid_results = []
-        
-        # 根据实际的数据格式来解析
-        # 这里假设result_data包含grid_results数组
-        if 'grid_results' in result_data:
-            for grid_data in result_data['grid_results']:
-                grid_result = GridResult(
-                    grid_id=grid_data.get('grid_id', 0),
-                    water_level=grid_data.get('water_level', 0.0),
-                    u=grid_data.get('u', 0.0),
-                    v=grid_data.get('v', 0.0),
-                    depth=grid_data.get('depth', 0.0)
-                )
-                grid_results.append(grid_result)
-        
-        return grid_results
-
-    def _send_result_to_simulation(self, step: int, grid_results: list[GridResult], highlight_grids: list[int]):
+    def _send_result_to_simulation(self, step: int, results: list[GridResult], flood_nodes_data: list[int], hsf_data: bytes):
         """发送结果到ISimulation接口"""
         try:
             with cc.compo.runtime.connect_crm(self.simulation_address, ISimulation) as simulation:
-                result = simulation.send_result(step, grid_results, highlight_grids)
+                # 你可以根据ISimulation的接口定义，调整参数传递方式
+                result = simulation.send_result(step, results, flood_nodes_data, hsf_data)
                 print(f"结果已发送到simulation, step: {step}, result: {result}")
         except Exception as e:
             print(f"发送结果到simulation时出错: {e}")

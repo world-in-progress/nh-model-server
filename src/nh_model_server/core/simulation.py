@@ -1,7 +1,11 @@
 import subprocess
 import multiprocessing
 import threading
+from pathlib import Path
 from src.nh_model_server.core.monitor import ResultMonitor
+
+from model.coupled_0703.Flood_new import run_flood
+from model.coupled_0703.pipe_NH import run_pipe_simulation
 
 class SimulationProcessManager:
     def __init__(self):
@@ -19,22 +23,27 @@ class SimulationProcessManager:
                 if all(proc.poll() is None for proc in procs.values()):
                     return False  # 该任务已在运行
 
+            inp_data = solution_data.get('inp_data')
+            inp_path = Path(resource_path)/f"{simulation_name}.inp"
+            with open(inp_path, 'w', encoding='utf-8') as f:
+                f.write(inp_data)
+            solution_data['inp_path'] = inp_path
+            shared = self.create_shared_memory()
             # 启动两个进程
-            # flood_proc = multiprocessing.Process(
-            #     target=run_flood,
-            #     args=(solution_name, simulation_name, solution_data, resource_path, step)
-            # )
-            # pipe_proc = multiprocessing.Process(
-            #     target=run_pipe_simulation,
-            #     args=(solution_name, simulation_name, solution_data, resource_path, step)
-            # )
-            # flood_proc.start()
-            # pipe_proc.start()
+            flood_proc = multiprocessing.Process(
+                target=run_flood,
+                args=(shared, solution_data, resource_path, step, 1)
+            )
+            pipe_proc = multiprocessing.Process(
+                target=run_pipe_simulation,
+                args=(shared, inp_path, resource_path, step)
+            )
+            flood_proc.start()
+            pipe_proc.start()
             # monitor进程
             procs = {}
-            # if you want to start flood/pipe, uncomment and add to procs dict
-            # procs['flood'] = flood_proc
-            # procs['pipe'] = pipe_proc
+            procs['flood'] = flood_proc
+            procs['pipe'] = pipe_proc
             if simulation_address:
                 monitor = ResultMonitor(resource_path, simulation_address, solution_name, simulation_name)
                 monitor_proc = multiprocessing.Process(target=monitor.run)
@@ -68,5 +77,15 @@ class SimulationProcessManager:
             self.processes.clear()
 
     # 可以扩展 rollback, pause, resume 等方法，参数同理加上 key
+
+    def create_shared_memory(self):
+        manager = multiprocessing.Manager()
+        return {
+            '1d_data': manager.dict(),       # 模型输出数据
+            '2d_data': manager.dict(),
+            '1d_ready': manager.Event(),
+            '2d_ready': manager.Event(),
+            'lock': manager.Lock(),
+        }
 
 simulation_process_manager = SimulationProcessManager()
