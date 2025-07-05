@@ -7,6 +7,8 @@ from src.nh_model_server.core.monitor import ResultMonitor
 from model.coupled_0703.Flood_new import run_flood
 from model.coupled_0703.pipe_NH import run_pipe_simulation
 
+_global_manager = multiprocessing.Manager()
+
 class SimulationProcessManager:
     def __init__(self):
         self.processes = {}  # key: (solution_name, simulation_name), value: process
@@ -32,7 +34,7 @@ class SimulationProcessManager:
             # 启动两个进程
             flood_proc = multiprocessing.Process(
                 target=run_flood,
-                args=(shared, solution_data, resource_path, step, 1)
+                args=(shared, solution_data, resource_path, step, 0)
             )
             pipe_proc = multiprocessing.Process(
                 target=run_pipe_simulation,
@@ -79,7 +81,7 @@ class SimulationProcessManager:
     # 可以扩展 rollback, pause, resume 等方法，参数同理加上 key
 
     def create_shared_memory(self):
-        manager = multiprocessing.Manager()
+        manager = _global_manager
         return {
             '1d_data': manager.dict(),       # 模型输出数据
             '2d_data': manager.dict(),
