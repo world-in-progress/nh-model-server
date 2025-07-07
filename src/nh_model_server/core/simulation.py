@@ -82,6 +82,10 @@ class SimulationProcessManager:
                         proc.terminate()
                         proc.join()
                 del self.processes[key]
+            env = self.envs.get(key)
+            if env:
+                env['manager'].shutdown()
+                del self.envs[key]
             return True
 
     def stop_all(self):
@@ -94,6 +98,9 @@ class SimulationProcessManager:
                         proc.terminate()
                         proc.join()
             self.processes.clear()
+            for env in self.envs.values():
+                env['manager'].shutdown()
+            self.envs.clear()
 
     # 可以扩展 rollback, pause, resume 等方法，参数同理加上 key
 
