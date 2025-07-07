@@ -5,6 +5,7 @@ import c_two as cc
 from icrms.isolution import ISolution
 import os
 from src.nh_model_server.core.config import settings
+import multiprocessing
 
 router = APIRouter(prefix='/model', tags=['model'])
 
@@ -26,9 +27,13 @@ def signal(body: Signal=Body(..., description='The signal to send')):
         # 2、分配资源文件夹
         resource_path = os.path.join(settings.RESOURCE_PATH, solution_name, simulation_name)
         os.makedirs(resource_path, exist_ok=True)
-        
+
+
         # 3、调用模型start，同时启动守护进程监控结果文件
-        ok = simulation_process_manager.start(solution_name, simulation_name, solution_data, resource_path, simulation_address, body.signal_value.step)
+        ok = simulation_process_manager.start(
+            solution_name, simulation_name, solution_data, resource_path,
+            simulation_address, body.signal_value.step
+        )
 
         return {'message': 'START SUCCESS' if ok else 'ALREADY RUNNING'}
         # return {'message': 'START SUCCESS'}
