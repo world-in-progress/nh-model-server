@@ -12,6 +12,18 @@ class SimulationProcessManager:
         self.processes = {}  # key: (solution_name, simulation_name), value: process
         self.lock = threading.Lock()
         self.envs = {}
+        self.process_group_types = {}  # key: group_type, value: callable for process group builder
+
+    def register_process_group(self, group_type, builder):
+        """注册进程组类型及其构建器"""
+        self.process_group_types[group_type] = builder
+
+    def build_process_group(self, group_type, *args, **kwargs):
+        """根据类型构建进程组"""
+        builder = self.process_group_types.get(group_type)
+        if not builder:
+            raise ValueError(f"Unknown process group type: {group_type}")
+        return builder(*args, **kwargs)
 
     def _get_key(self, solution_name, simulation_name):
         return (solution_name, simulation_name)

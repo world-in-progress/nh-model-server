@@ -119,3 +119,10 @@ class ISolution:
         :return: 解决方案数据
         """
         ...
+
+    def clone_env(self) -> dict:
+        """
+        克隆环境变量
+        :return: 环境变量
+        """
+        ...
