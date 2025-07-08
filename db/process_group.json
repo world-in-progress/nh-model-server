@@ -1,0 +1,135 @@
+[
+  {
+    "group_type": "flood_pipe",
+    "description": "洪水-管道联合模拟",
+    "shared": [
+      {
+        "name": "1d_data",
+        "type": "dict"
+      },
+      {
+        "name": "2d_data",
+        "type": "dict"
+      },
+      {
+        "name": "1d_ready",
+        "type": "Event"
+      },
+      {
+        "name": "2d_ready",
+        "type": "Event"
+      },
+      {
+        "name": "lock",
+        "type": "Lock"
+      }
+    ],
+    "processes": [
+      {
+        "name": "flood",
+        "script": "coupled_0703/Flood_new.py",
+        "entrypoint": "run_flood",
+        "parameters": [
+          {
+            "name": "shared",
+            "type": "dict"
+          },
+          {
+            "name": "ne_name",
+            "type": "str"
+          },
+          {
+            "name": "ns_name",
+            "type": "str"
+          },
+          {
+            "name": "inp_name",
+            "type": "str"
+          },
+          {
+            "name": "rainfall_name",
+            "type": "str"
+          },
+          {
+            "name": "gate_name",
+            "type": "str"
+          },
+          {
+            "name": "tides_name",
+            "type": "str"
+          },
+          {
+            "name": "resource_path",
+            "type": "str"
+          },
+          {
+            "name": "step",
+            "type": "int"
+          },
+          {
+            "name": "flag",
+            "type": "int"
+          }
+        ]
+      },
+      {
+        "name": "pipe",
+        "script": "coupled_0703/pipe_NH.py",
+        "entrypoint": "run_pipe_simulation",
+        "parameters": [
+          {
+            "name": "shared",
+            "type": "dict"
+          },
+          {
+            "name": "inp_name",
+            "type": "str"
+          },
+          {
+            "name": "resource_path",
+            "type": "str"
+          },
+          {
+            "name": "step",
+            "type": "int"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "group_type": "pipe_only",
+    "description": "仅管道模拟",
+    "shared": [
+      {
+        "name": "shared_data",
+        "type": "dict"
+      }
+    ],
+    "processes": [
+      {
+        "name": "pipe",
+        "script": "model/coupled_0703/pipe_NH.py",
+        "entrypoint": "run_pipe_simulation",
+        "parameters": [
+          {
+            "name": "shared",
+            "type": "dict"
+          },
+          {
+            "name": "inp_path",
+            "type": "str"
+          },
+          {
+            "name": "resource_path",
+            "type": "str"
+          },
+          {
+            "name": "step",
+            "type": "int"
+          }
+        ]
+      }
+    ]
+  }
+]

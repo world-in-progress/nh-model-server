@@ -87,38 +87,61 @@ def clone_env(req: CloneEnvRequest, background_tasks: BackgroundTasks):
             for idx, (key, value) in enumerate(env_data.items()):
                 file_name = value['file_name']
                 file_path = os.path.join(resource_dir, file_name)
-                # Write binary or text depending on value type
-                mode = 'wb' if isinstance(value, (bytes, bytearray)) else 'w'
-                with open(file_path, mode) as f:
-                    f.write(value['content'])
+                content = value['content']
+                # 判断 content 类型
+                if isinstance(content, (bytes, bytearray)):
+                    mode = 'wb'
+                    open_kwargs = {}
+                else:
+                    mode = 'w'
+                    open_kwargs = {'encoding': 'utf-8'}
+                with open(file_path, mode, **open_kwargs) as f:
+                    if mode == 'w':
+                        # 如果是 list，转为字符串
+                        if isinstance(content, list):
+                            f.write(''.join(str(line) for line in content))
+                        else:
+                            f.write(str(content))
+                    else:
+                        f.write(content)
                 # Update progress
                 task_manager.update_task(task_id, progress=int((idx+1)/total*100))
             task_manager.update_task(task_id, status=TaskStatus.SUCCESS, progress=100)
         except Exception as e:
-            task_manager.update_task(task_id, status=TaskStatus.FAILED, progress=0, info={"error": str(e)})
+            task_manager.update_task(task_id, status=TaskStatus.FAILED, info={"error": str(e)})
     background_tasks.add_task(do_clone, task_id)
     return {"task_id": task_id}
 
 # 获取克隆进度
-@router.get('/clone_progress')
+@router.get('/clone_progress/{task_id}')
 def clone_progress(task_id: str):
     progress = task_manager.get_task_progress(task_id)
-    if not progress:
+    if progress == -1:
         raise HTTPException(404, detail="Task not found")
     return progress
+
+# 获取所有任务
+@router.get('/list_tasks')
+def list_tasks():
+    return task_manager.list_tasks()
 
 # 3. 构建进程组
 @router.post('/build_process_group')
 def build_process_group(req: BuildProcessGroupRequest):
     try:
-        group = simulation_process_manager.build_process_group(req.group_type, *req.args, **req.kwargs)
-        return {"result": "success", "group_type": req.group_type}
+        config = simulation_process_manager.get_process_group_config(req.group_type)
+        if not config:
+            raise HTTPException(400, detail="Unknown group_type")
+        # 组装每个进程的参数
+        process_params = {}
+        for proc in config["processes"]:
+            name = proc["name"]
+            args = req.process_args.get(name, [])
+            process_params[name] = args
+        group_id = simulation_process_manager.build_process_group(req.solution_name, req.simulation_name, req.group_type, process_params=process_params)
+        return {"result": "success", "group_id": group_id}
     except Exception as e:
         return {"result": "fail", "error": str(e)}
-
-@router.get('/list_process_groups')
-def list_process_groups():
-    return {"registered": list(simulation_process_manager.process_group_types.keys())}
 
 # 4. 启动模拟
 @router.post('/start_simulation')

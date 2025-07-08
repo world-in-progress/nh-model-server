@@ -14,9 +14,13 @@ class Settings(BaseSettings):
         
     # Model configuration
     RESOURCE_PATH: str = str(ROOT_DIR / 'resource')
+    MODEL_PATH: str = str(ROOT_DIR / 'model')
 
     # Resource server proxy address
     RESOURCE_SERVER_PROXY_ADDRESS: str = 'http://localhost:9000/api/proxy/discover'
+
+    # DB configuration
+    DB_PATH: str = str(ROOT_DIR / 'db')
 
     # CORS
     CORS_ORIGINS: list[str] = ['*']

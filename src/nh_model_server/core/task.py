@@ -19,12 +19,12 @@ class Task(BaseModel):
 
 class TaskManager:
     def __init__(self):
-        self.tasks = {}  # key: task_id, value: Task
+        self.tasks: dict[str, Task] = {}  # key: task_id, value: Task
         self.lock = threading.Lock()
 
     def create_task(self, info=None):
         with self.lock:
-            task_id = f"sync_{time.time()}"
+            task_id = f"clone_{time.time()}"
             self.tasks[task_id] = Task(status=TaskStatus.PENDING, progress=0, info=info)
             return task_id
 
@@ -34,11 +34,11 @@ class TaskManager:
             if not task:
                 return False
             if status:
-                task['status'] = status
+                task.status = status
             if progress is not None:
-                task['progress'] = progress
+                task.progress = progress
             if info is not None:
-                task['info'] = info
+                task.info = info
             return True
 
     def get_task(self, task_id):
@@ -49,8 +49,8 @@ class TaskManager:
         with self.lock:
             task = self.tasks.get(task_id)
             if not task:
-                return 0
-            return task['progress']
+                return -1
+            return task.progress
 
     def list_tasks(self):
         with self.lock:

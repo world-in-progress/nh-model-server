@@ -1,8 +1,11 @@
 import subprocess
 import multiprocessing
 import threading
+import os
 from pathlib import Path
 from src.nh_model_server.core.monitor import ResultMonitor
+import json
+from src.nh_model_server.core.config import settings
 
 from model.coupled_0703.Flood_new import run_flood
 from model.coupled_0703.pipe_NH import run_pipe_simulation
@@ -12,18 +15,8 @@ class SimulationProcessManager:
         self.processes = {}  # key: (solution_name, simulation_name), value: process
         self.lock = threading.Lock()
         self.envs = {}
-        self.process_group_types = {}  # key: group_type, value: callable for process group builder
-
-    def register_process_group(self, group_type, builder):
-        """注册进程组类型及其构建器"""
-        self.process_group_types[group_type] = builder
-
-    def build_process_group(self, group_type, *args, **kwargs):
-        """根据类型构建进程组"""
-        builder = self.process_group_types.get(group_type)
-        if not builder:
-            raise ValueError(f"Unknown process group type: {group_type}")
-        return builder(*args, **kwargs)
+        self.process_group_configs = self.load_process_group_configs()
+        self.process_groups = {}  # 保存已构建但未执行的进程组
 
     def _get_key(self, solution_name, simulation_name):
         return (solution_name, simulation_name)
@@ -115,5 +108,83 @@ class SimulationProcessManager:
             self.envs.clear()
 
     # 可以扩展 rollback, pause, resume 等方法，参数同理加上 key
+
+    def load_process_group_configs(self, path=None):
+        if path is None:
+            path = os.path.join(settings.DB_PATH, "process_group.json")
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def get_process_group_config(self, group_type):
+        for group in self.process_group_configs:
+            if group["group_type"] == group_type:
+                return group
+        return None
+
+    def build_shared_structure(self, shared_config):
+        manager = multiprocessing.Manager()
+        shared = {}
+        for item in shared_config:
+            name, typ = item["name"], item["type"]
+            if typ == "dict":
+                shared[name] = manager.dict()
+            elif typ == "Event":
+                shared[name] = manager.Event()
+            elif typ == "Lock":
+                shared[name] = manager.Lock()
+            else:
+                raise ValueError(f"Unsupported shared type: {typ}")
+        return shared, manager
+
+    def build_process_group(self, solution_name, simulation_name, group_type, process_params=None):
+        import importlib.util
+        config = self.get_process_group_config(group_type)
+        if not config:
+            raise ValueError(f"Unknown process group type: {group_type}")
+        shared, manager = self.build_shared_structure(config.get("shared", []))
+        resource_path = settings.RESOURCE_PATH + "/" + solution_name + "/" + simulation_name
+        processes = {}
+        # proc_cfg是每一个进程的配置
+        for proc_cfg in config["processes"]:
+            proc_name = proc_cfg["name"]
+            proc_params = {}
+            # param_defs是当前遍历的进程的参数配置
+            param_defs = proc_cfg["parameters"]
+            args = {}
+            if process_params and proc_name in process_params:
+                args = process_params[proc_name]
+            for param in param_defs:
+                pname, ptype = param["name"], param["type"]
+                if pname == "shared":
+                    proc_params[pname] = shared
+                elif pname == "resource_path":
+                    proc_params[pname] = resource_path
+                elif pname in args:
+                    proc_params[pname] = args[pname]
+                else:
+                    raise ValueError(f"Missing parameter: {pname} for process {proc_name}")
+            # 动态import脚本，获取entrypoint
+            script_path = proc_cfg["script"]
+            entrypoint = proc_cfg["entrypoint"]
+            # 支持相对路径
+            if not os.path.isabs(script_path):
+                script_path = os.path.join(settings.MODEL_PATH, script_path)
+            module_name = f"dynamic_module_{proc_name}"
+            spec = importlib.util.spec_from_file_location(module_name, script_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            entrypoint_func = getattr(module, entrypoint)
+            proc = multiprocessing.Process(target=entrypoint_func, kwargs=proc_params)
+            processes[proc_name] = proc
+        group_id = f"{solution_name}_{simulation_name}"
+        print(group_id)
+        self.process_groups[group_id] = {
+            "group_type": group_type,
+            "shared": shared,
+            "manager": manager,
+            "processes": processes
+        }
+        print(self.process_groups[group_id]["processes"])
+        return group_id
 
 simulation_process_manager = SimulationProcessManager()

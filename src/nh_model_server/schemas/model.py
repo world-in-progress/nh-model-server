@@ -27,9 +27,10 @@ class CloneEnvRequest(BaseModel):
     solution_address: str
 
 class BuildProcessGroupRequest(BaseModel):
+    solution_name: str
+    simulation_name: str
     group_type: str
-    args: list = []
-    kwargs: dict = {}
+    process_args: dict = {}
 
 class StartSimulationRequest(BaseModel):
     solution_name: str
