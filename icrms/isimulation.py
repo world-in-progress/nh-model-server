@@ -65,13 +65,11 @@ class ISimulation:
         """
         ...
 
-    def send_result(self, step: int, result: list[GridResult], highlight_grids: list[int], hsf: bytes) -> dict[str, bool | str]:
+    def send_result(self, step: int, result_data: dict[str, Any], file_types: list[str], file_suffix: dict[str, str]) -> dict[str, bool | str]:
         """
         发送结果
         :param step: 步骤
-        :param result: 结果
-        :param highlight_grids: 特殊网格
-        :param hsf: hsf文件
+        :param result_data: 结果数据
         """
         ...
 

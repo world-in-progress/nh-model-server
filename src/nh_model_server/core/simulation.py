@@ -136,7 +136,7 @@ class SimulationProcessManager:
                 raise ValueError(f"Unsupported shared type: {typ}")
         return shared, manager
 
-    def build_process_group(self, solution_name, simulation_name, group_type, process_params=None):
+    def build_process_group(self, solution_name, simulation_name, simulation_address, group_type, process_params=None):
         import importlib.util
         config = self.get_process_group_config(group_type)
         if not config:
@@ -176,6 +176,13 @@ class SimulationProcessManager:
             entrypoint_func = getattr(module, entrypoint)
             proc = multiprocessing.Process(target=entrypoint_func, kwargs=proc_params)
             processes[proc_name] = proc
+        # 创建monitor进程对象
+        monitor_config = config.get("monitor_config", {})
+        file_types = monitor_config.get("file_types", None)
+        file_suffix = monitor_config.get("file_suffix", None)
+        monitor = ResultMonitor(resource_path, simulation_address, solution_name, simulation_name, file_types=file_types, file_suffix=file_suffix)
+        monitor_proc = multiprocessing.Process(target=monitor.run)
+        processes["monitor"] = monitor_proc
         group_id = f"{solution_name}_{simulation_name}"
         print(group_id)
         self.process_groups[group_id] = {
@@ -186,5 +193,28 @@ class SimulationProcessManager:
         }
         print(self.process_groups[group_id]["processes"])
         return group_id
+
+    def start_simulation(self, solution_name, simulation_name):
+        key = self._get_key(solution_name, simulation_name)
+        group_id = f"{solution_name}_{simulation_name}"
+        with self.lock:
+            # 检查是否已在运行
+            if key in self.processes:
+                procs = self.processes[key]
+                if all(proc.is_alive() for proc in procs.values()):
+                    return False  # 该任务已在运行
+            # 检查进程组是否已构建
+            if group_id not in self.process_groups:
+                raise RuntimeError(f"Process group {group_id} not built. Please build it first.")
+            group = self.process_groups[group_id]
+            # 启动进程组内所有进程
+            procs = group["processes"]
+            for proc in procs.values():
+                if not proc.is_alive():
+                    proc.start()
+            
+            # 记录所有进程
+            self.processes[key] = dict(procs)
+            return True
 
 simulation_process_manager = SimulationProcessManager()

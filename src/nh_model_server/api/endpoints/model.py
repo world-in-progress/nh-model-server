@@ -138,7 +138,7 @@ def build_process_group(req: BuildProcessGroupRequest):
             name = proc["name"]
             args = req.process_args.get(name, [])
             process_params[name] = args
-        group_id = simulation_process_manager.build_process_group(req.solution_name, req.simulation_name, req.group_type, process_params=process_params)
+        group_id = simulation_process_manager.build_process_group(req.solution_name, req.simulation_name, req.simulation_address, req.group_type, process_params=process_params)
         return {"result": "success", "group_id": group_id}
     except Exception as e:
         return {"result": "fail", "error": str(e)}
@@ -146,7 +146,7 @@ def build_process_group(req: BuildProcessGroupRequest):
 # 4. 启动模拟
 @router.post('/start_simulation')
 def start_simulation(req: StartSimulationRequest):
-    ok = simulation_process_manager.start(
-        req.solution_name, req.simulation_name, req.solution_data, req.resource_path, req.simulation_address, req.step
+    ok = simulation_process_manager.start_simulation(
+        req.solution_name, req.simulation_name
     )
     return {"result": "started" if ok else "already running"}
