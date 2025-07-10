@@ -29,10 +29,23 @@ class CloneEnvRequest(BaseModel):
 class BuildProcessGroupRequest(BaseModel):
     solution_name: str
     simulation_name: str
-    simulation_address: str
     group_type: str
     process_args: dict = {}
 
 class StartSimulationRequest(BaseModel):
     solution_name: str
     simulation_name: str
+    simulation_address: str
+
+class StopSimulationRequest(BaseModel):
+    solution_name: str
+    simulation_name: str
+
+class PauseSimulationRequest(BaseModel):
+    solution_name: str
+    simulation_name: str
+
+class ResumeSimulationRequest(BaseModel):
+    solution_name: str
+    simulation_name: str
+    simulation_address: str

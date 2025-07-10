@@ -136,8 +136,8 @@ class SimulationProcessManager:
                 raise ValueError(f"Unsupported shared type: {typ}")
         return shared, manager
 
-    def build_process_group(self, solution_name, simulation_name, simulation_address, group_type, process_params=None):
-        import importlib.util
+    def build_process_group(self, solution_name, simulation_name, group_type, process_params=None):
+        import importlib
         config = self.get_process_group_config(group_type)
         if not config:
             raise ValueError(f"Unknown process group type: {group_type}")
@@ -168,33 +168,25 @@ class SimulationProcessManager:
             entrypoint = proc_cfg["entrypoint"]
             # 支持相对路径
             if not os.path.isabs(script_path):
-                script_path = os.path.join(settings.MODEL_PATH, script_path)
-            module_name = f"dynamic_module_{proc_name}"
-            spec = importlib.util.spec_from_file_location(module_name, script_path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+                module_path = settings.MODEL_PATH + "." + script_path
+            module = importlib.import_module(module_path)
             entrypoint_func = getattr(module, entrypoint)
             proc = multiprocessing.Process(target=entrypoint_func, kwargs=proc_params)
             processes[proc_name] = proc
-        # 创建monitor进程对象
-        monitor_config = config.get("monitor_config", {})
-        file_types = monitor_config.get("file_types", None)
-        file_suffix = monitor_config.get("file_suffix", None)
-        monitor = ResultMonitor(resource_path, simulation_address, solution_name, simulation_name, file_types=file_types, file_suffix=file_suffix)
-        monitor_proc = multiprocessing.Process(target=monitor.run)
-        processes["monitor"] = monitor_proc
         group_id = f"{solution_name}_{simulation_name}"
         print(group_id)
         self.process_groups[group_id] = {
             "group_type": group_type,
             "shared": shared,
             "manager": manager,
-            "processes": processes
+            "processes": processes,
+            "resource_path": resource_path
         }
         print(self.process_groups[group_id]["processes"])
         return group_id
 
-    def start_simulation(self, solution_name, simulation_name):
+    # 启动模拟时才会将solution运行为simulation从而得到simulation_address
+    def start_simulation(self, solution_name, simulation_name, simulation_address):
         key = self._get_key(solution_name, simulation_name)
         group_id = f"{solution_name}_{simulation_name}"
         with self.lock:
@@ -207,14 +199,74 @@ class SimulationProcessManager:
             if group_id not in self.process_groups:
                 raise RuntimeError(f"Process group {group_id} not built. Please build it first.")
             group = self.process_groups[group_id]
+            
+            # 创建资源路径
+            resource_path = group["resource_path"]
+            os.makedirs(resource_path, exist_ok=True)
+
+            # 创建并启动monitor进程
+            config = self.get_process_group_config(group["group_type"])
+            monitor_config = config.get("monitor_config", {})
+            file_types = monitor_config.get("file_types", None)
+            file_suffix = monitor_config.get("file_suffix", None)
+            monitor = ResultMonitor(
+                resource_path, 
+                simulation_address, 
+                solution_name, 
+                simulation_name, 
+                file_types=file_types, 
+                file_suffix=file_suffix
+            )
+            monitor_proc = multiprocessing.Process(target=monitor.run)
+            
             # 启动进程组内所有进程
             procs = group["processes"]
             for proc in procs.values():
                 if not proc.is_alive():
                     proc.start()
             
-            # 记录所有进程
-            self.processes[key] = dict(procs)
+            # 启动monitor进程
+            monitor_proc.start()
+            
+            # 记录所有进程（包括monitor）
+            all_procs = dict(procs)
+            all_procs["monitor"] = monitor_proc
+            self.processes[key] = all_procs
+            return True
+        
+    def stop_simulation(self, solution_name, simulation_name):
+        key = self._get_key(solution_name, simulation_name)
+        with self.lock:
+            if key in self.processes:
+                procs = self.processes[key]
+                for proc in procs.values():
+                    if proc.is_alive():
+                        proc.terminate()
+                        proc.join()
+                del self.processes[key]
+            # TODO: 删除资源路径
+            return True
+        
+    def pause_simulation(self, solution_name, simulation_name):
+        key = self._get_key(solution_name, simulation_name)
+        with self.lock:
+            if key in self.processes:
+                procs = self.processes[key]
+                for proc in procs.values():
+                    if proc.is_alive():
+                        proc.terminate()
+                        proc.join()
+            return True
+
+    def resume_simulation(self, solution_name, simulation_name, simulation_address):
+        key = self._get_key(solution_name, simulation_name)
+        with self.lock:
+            # TODO: 获取human_action
+            if key in self.processes:
+                procs = self.processes[key]
+                for proc in procs.values():
+                    if not proc.is_alive():
+                        proc.start()
             return True
 
 simulation_process_manager = SimulationProcessManager()

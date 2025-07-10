@@ -186,3 +186,5 @@ ehthumbs.db
 Thumbs.db
 
 resource
+
+__pycache__

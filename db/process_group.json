@@ -27,7 +27,7 @@
     "processes": [
       {
         "name": "flood",
-        "script": "coupled_0703/Flood_new.py",
+        "script": "coupled_0703.Flood_new",
         "entrypoint": "run_flood",
         "parameters": [
           {
@@ -74,7 +74,7 @@
       },
       {
         "name": "pipe",
-        "script": "coupled_0703/pipe_NH.py",
+        "script": "coupled_0703.pipe_NH",
         "entrypoint": "run_pipe_simulation",
         "parameters": [
           {

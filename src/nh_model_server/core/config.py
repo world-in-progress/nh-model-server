@@ -14,7 +14,7 @@ class Settings(BaseSettings):
         
     # Model configuration
     RESOURCE_PATH: str = str(ROOT_DIR / 'resource')
-    MODEL_PATH: str = str(ROOT_DIR / 'model')
+    MODEL_PATH: str = 'model'
 
     # Resource server proxy address
     RESOURCE_SERVER_PROXY_ADDRESS: str = 'http://localhost:9000/api/proxy/discover'

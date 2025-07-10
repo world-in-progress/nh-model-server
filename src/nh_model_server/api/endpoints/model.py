@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Body, BackgroundTasks, HTTPException
-from src.nh_model_server.schemas.model import Signal, SignalType, SolutionCheckRequest, CloneEnvRequest, BuildProcessGroupRequest, StartSimulationRequest
+from src.nh_model_server.schemas.model import Signal, SignalType, SolutionCheckRequest, CloneEnvRequest, BuildProcessGroupRequest, StartSimulationRequest, StopSimulationRequest, PauseSimulationRequest, ResumeSimulationRequest
 from src.nh_model_server.core.simulation import simulation_process_manager
 from src.nh_model_server.core.task import task_manager, TaskStatus
 import c_two as cc
@@ -78,6 +78,7 @@ def clone_env(req: CloneEnvRequest, background_tasks: BackgroundTasks):
         try:
             task_manager.update_task(task_id, status=TaskStatus.RUNNING, progress=0)
             # Connect to remote ISolution and clone env
+            print(req.solution_address)
             with cc.compo.runtime.connect_crm(req.solution_address, ISolution) as solution:
                 env_data = solution.clone_env()
             # Prepare resource directory
@@ -138,7 +139,7 @@ def build_process_group(req: BuildProcessGroupRequest):
             name = proc["name"]
             args = req.process_args.get(name, [])
             process_params[name] = args
-        group_id = simulation_process_manager.build_process_group(req.solution_name, req.simulation_name, req.simulation_address, req.group_type, process_params=process_params)
+        group_id = simulation_process_manager.build_process_group(req.solution_name, req.simulation_name, req.group_type, process_params=process_params)
         return {"result": "success", "group_id": group_id}
     except Exception as e:
         return {"result": "fail", "error": str(e)}
@@ -147,6 +148,30 @@ def build_process_group(req: BuildProcessGroupRequest):
 @router.post('/start_simulation')
 def start_simulation(req: StartSimulationRequest):
     ok = simulation_process_manager.start_simulation(
-        req.solution_name, req.simulation_name
+        req.solution_name, req.simulation_name, req.simulation_address
     )
     return {"result": "started" if ok else "already running"}
+
+# 5. 结束模拟
+@router.post('/stop_simulation')
+def stop_simulation(req: StopSimulationRequest):
+    ok = simulation_process_manager.stop_simulation(
+        req.solution_name, req.simulation_name
+    )
+    return {"result": "stopped" if ok else "not running"}
+
+# 6. 暂停模拟
+@router.post('/pause_simulation')
+def pause_simulation(req: PauseSimulationRequest):
+    ok = simulation_process_manager.pause_simulation(
+        req.solution_name, req.simulation_name
+    )
+    return {"result": "paused" if ok else "not running"}
+
+# 7. 恢复模拟
+@router.post('/resume_simulation')
+def resume_simulation(req: ResumeSimulationRequest):
+    ok = simulation_process_manager.resume_simulation(
+        req.solution_name, req.simulation_name, req.simulation_address
+    )
+    return {"result": "resumed" if ok else "not running"}
