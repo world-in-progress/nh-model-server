@@ -27,7 +27,7 @@
     "processes": [
       {
         "name": "flood",
-        "script": "coupled_0703.Flood_new",
+        "script": "coupled_0710.Flood_new",
         "entrypoint": "run_flood",
         "parameters": [
           {
@@ -35,27 +35,27 @@
             "type": "dict"
           },
           {
-            "name": "ne_name",
+            "name": "ne_path",
             "type": "str"
           },
           {
-            "name": "ns_name",
+            "name": "ns_path",
             "type": "str"
           },
           {
-            "name": "inp_name",
+            "name": "inp_path",
             "type": "str"
           },
           {
-            "name": "rainfall_name",
+            "name": "rainfall_path",
             "type": "str"
           },
           {
-            "name": "gate_name",
+            "name": "gate_path",
             "type": "str"
           },
           {
-            "name": "tides_name",
+            "name": "tides_path",
             "type": "str"
           },
           {
@@ -74,7 +74,7 @@
       },
       {
         "name": "pipe",
-        "script": "coupled_0703.pipe_NH",
+        "script": "coupled_0710.pipe_NH",
         "entrypoint": "run_pipe_simulation",
         "parameters": [
           {
@@ -82,7 +82,7 @@
             "type": "dict"
           },
           {
-            "name": "inp_name",
+            "name": "inp_path",
             "type": "str"
           },
           {
@@ -110,8 +110,8 @@
     }
   },
   {
-    "group_type": "pipe_only",
-    "description": "仅管道模拟",
+    "group_type": "test",
+    "description": "测试模拟",
     "shared": [
       {
         "name": "shared_data",
@@ -120,8 +120,8 @@
     ],
     "processes": [
       {
-        "name": "pipe",
-        "script": "model/coupled_0703/pipe_NH.py",
+        "name": "test",
+        "script": "model/test.py",
         "entrypoint": "run_pipe_simulation",
         "parameters": [
           {
