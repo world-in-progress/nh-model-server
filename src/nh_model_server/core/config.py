@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = '0.1.0'
     APP_DESCRIPTION: str = 'Model Server for NH'
     DEBUG: bool = True
-    SERVER_PORT: int = 6000
+    SERVER_PORT: int = 6543
     SERVER_HOST: str = '0.0.0.0'
         
     # Model configuration

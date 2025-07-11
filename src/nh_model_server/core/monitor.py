@@ -30,10 +30,11 @@ class ResultMonitor:
         """只监测当前step文件夹，发现.done后处理并current_step+1"""
         if not os.path.exists(self.resource_path):
             return
-        step_dir = os.path.join(self.resource_path, "step" + str(self.current_step))
+        step_name = "step" + str(self.current_step)
+        step_dir = os.path.join(self.resource_path, step_name)
         if not os.path.isdir(step_dir):
             return
-        done_file = os.path.join(step_dir, '.done')
+        done_file = os.path.join(step_dir, f'{step_name}.done')
         if os.path.exists(done_file):
             self._process_step(self.current_step, step_dir)
             print(f"step {self.current_step} 已处理，监控下一个step")
