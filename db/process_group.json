@@ -55,7 +55,7 @@
             "type": "str"
           },
           {
-            "name": "tides_path",
+            "name": "tide_path",
             "type": "str"
           },
           {

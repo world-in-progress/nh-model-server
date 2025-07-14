@@ -130,16 +130,9 @@ def list_tasks():
 @router.post('/build_process_group')
 def build_process_group(req: BuildProcessGroupRequest):
     try:
-        config = simulation_process_manager.get_process_group_config(req.group_type)
-        if not config:
-            raise HTTPException(400, detail="Unknown group_type")
-        # 组装每个进程的参数
-        process_params = {}
-        for proc in config["processes"]:
-            name = proc["name"]
-            args = req.process_args.get(name, [])
-            process_params[name] = args
-        group_id = simulation_process_manager.build_process_group(req.solution_name, req.simulation_name, req.group_type, process_params=process_params)
+        with cc.compo.runtime.connect_crm(req.solution_address, ISolution) as solution:
+            env = solution.get_env()
+        group_id = simulation_process_manager.build_process_group(req.solution_name, req.simulation_name, req.group_type, env)
         return {"result": "success", "group_id": group_id}
     except Exception as e:
         return {"result": "fail", "error": str(e)}

@@ -136,7 +136,7 @@ class SimulationProcessManager:
                 raise ValueError(f"Unsupported shared type: {typ}")
         return shared, manager
 
-    def build_process_group(self, solution_name, simulation_name, group_type, process_params=None):
+    def build_process_group(self, solution_name, simulation_name, group_type, env):
         import importlib
         config = self.get_process_group_config(group_type)
         if not config:
@@ -150,17 +150,20 @@ class SimulationProcessManager:
             proc_params = {}
             # param_defs是当前遍历的进程的参数配置
             param_defs = proc_cfg["parameters"]
-            args = {}
-            if process_params and proc_name in process_params:
-                args = process_params[proc_name]
             for param in param_defs:
                 pname, ptype = param["name"], param["type"]
                 if pname == "shared":
                     proc_params[pname] = shared
                 elif pname == "resource_path":
                     proc_params[pname] = resource_path
-                elif pname in args:
-                    proc_params[pname] = args[pname]
+                elif pname == "step":
+                    proc_params[pname] = 0
+                elif pname == "flag":
+                    proc_params[pname] = 1
+                elif pname in env:
+                    origin_path = env[pname]
+                    file_name = os.path.basename(origin_path)
+                    proc_params[pname] = file_name
                 else:
                     raise ValueError(f"Missing parameter: {pname} for process {proc_name}")
             # 动态import脚本，获取entrypoint

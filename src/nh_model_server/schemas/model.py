@@ -30,7 +30,7 @@ class BuildProcessGroupRequest(BaseModel):
     solution_name: str
     simulation_name: str
     group_type: str
-    process_args: dict = {}
+    solution_address: str
 
 class StartSimulationRequest(BaseModel):
     solution_name: str
