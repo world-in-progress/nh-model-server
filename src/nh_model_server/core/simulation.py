@@ -1,4 +1,3 @@
-import subprocess
 import multiprocessing
 import threading
 import os
@@ -15,8 +14,9 @@ class SimulationProcessManager:
         self.processes = {}  # key: (solution_name, simulation_name), value: process
         self.lock = threading.Lock()
         self.envs = {}
-        self.process_group_configs = self.load_process_group_configs()
-        self.process_groups = {}  # 保存已构建但未执行的进程组
+        self.configs = self.load_process_group_configs()
+        self.monitors = {}  # 保存monitor对象和monitor进程: {group_id: {"monitor_obj": obj, "monitor_proc": proc}}
+        self.process_group_info = {}  # 保存进程组构建信息
 
     def _get_key(self, solution_name, simulation_name):
         return (solution_name, simulation_name)
@@ -116,34 +116,19 @@ class SimulationProcessManager:
             return json.load(f)
 
     def get_process_group_config(self, group_type):
-        for group in self.process_group_configs:
+        for group in self.configs:
             if group["group_type"] == group_type:
                 return group
         return None
 
-    def build_shared_structure(self, shared_config):
-        manager = multiprocessing.Manager()
-        shared = {}
-        for item in shared_config:
-            name, typ = item["name"], item["type"]
-            if typ == "dict":
-                shared[name] = manager.dict()
-            elif typ == "Event":
-                shared[name] = manager.Event()
-            elif typ == "Lock":
-                shared[name] = manager.Lock()
-            else:
-                raise ValueError(f"Unsupported shared type: {typ}")
-        return shared, manager
-
     def build_process_group(self, solution_name, simulation_name, group_type, env):
-        import importlib
         config = self.get_process_group_config(group_type)
         if not config:
             raise ValueError(f"Unknown process group type: {group_type}")
-        shared, manager = self.build_shared_structure(config.get("shared", []))
         resource_path = settings.RESOURCE_PATH + "/" + solution_name + "/" + simulation_name
-        processes = {}
+        
+        # 只保存进程配置，不创建真实的进程对象
+        process_configs = []
         # proc_cfg是每一个进程的配置
         for proc_cfg in config["processes"]:
             proc_name = proc_cfg["name"]
@@ -153,42 +138,43 @@ class SimulationProcessManager:
             for param in param_defs:
                 pname, ptype = param["name"], param["type"]
                 if pname == "shared":
-                    proc_params[pname] = shared
+                    proc_params[pname] = "shared"  # 标记，在monitor中会替换为真实的shared对象
                 elif pname == "resource_path":
                     proc_params[pname] = resource_path
                 elif pname == "step":
                     proc_params[pname] = 0
                 elif pname == "flag":
-                    proc_params[pname] = 1
+                    proc_params[pname] = 0
                 elif pname in env:
                     origin_path = env[pname]
                     file_name = os.path.basename(origin_path)
                     proc_params[pname] = file_name
                 else:
                     raise ValueError(f"Missing parameter: {pname} for process {proc_name}")
-            # 动态import脚本，获取entrypoint
-            script_path = proc_cfg["script"]
-            entrypoint = proc_cfg["entrypoint"]
-            # 支持相对路径
-            if not os.path.isabs(script_path):
-                module_path = settings.MODEL_PATH + "." + script_path
-            module = importlib.import_module(module_path)
-            entrypoint_func = getattr(module, entrypoint)
-            proc = multiprocessing.Process(target=entrypoint_func, kwargs=proc_params)
-            processes[proc_name] = proc
+            
+            # 保存进程配置
+            process_config = {
+                "name": proc_name,
+                "script": proc_cfg["script"],
+                "entrypoint": proc_cfg["entrypoint"],
+                "params": proc_params
+            }
+            process_configs.append(process_config)
+        
         group_id = f"{solution_name}_{simulation_name}"
         print(group_id)
-        self.process_groups[group_id] = {
+        
+        self.process_group_info[group_id] = {
             "group_type": group_type,
-            "shared": shared,
-            "manager": manager,
-            "processes": processes,
-            "resource_path": resource_path
+            "process_configs": process_configs,
+            "resource_path": resource_path,
+            "shared_config": config.get("shared", []),
+            "monitor_config": config.get("monitor_config", {})
         }
-        print(self.process_groups[group_id]["processes"])
+        
+        print(f"已构建进程组配置，包含 {len(process_configs)} 个进程配置")
         return group_id
 
-    # 启动模拟时才会将solution运行为simulation从而得到simulation_address
     def start_simulation(self, solution_name, simulation_name, simulation_address):
         key = self._get_key(solution_name, simulation_name)
         group_id = f"{solution_name}_{simulation_name}"
@@ -198,56 +184,93 @@ class SimulationProcessManager:
                 procs = self.processes[key]
                 if all(proc.is_alive() for proc in procs.values()):
                     return False  # 该任务已在运行
-            # 检查进程组是否已构建
-            if group_id not in self.process_groups:
-                raise RuntimeError(f"Process group {group_id} not built. Please build it first.")
-            group = self.process_groups[group_id]
+            
+            if group_id not in self.process_group_info:
+                raise RuntimeError(f"Process group config {group_id} not found.")
+            
+            config_info = self.process_group_info[group_id]
             
             # 创建资源路径
-            resource_path = group["resource_path"]
+            resource_path = config_info["resource_path"]
             os.makedirs(resource_path, exist_ok=True)
+            print("资源路径创建成功！")
 
-            # 创建并启动monitor进程
-            config = self.get_process_group_config(group["group_type"])
-            monitor_config = config.get("monitor_config", {})
+            # 获取monitor配置
+            monitor_config = config_info["monitor_config"]
             file_types = monitor_config.get("file_types", None)
             file_suffix = monitor_config.get("file_suffix", None)
+            
+            # 创建跨进程停止信号
+            manager = multiprocessing.Manager()
+            stop_event = manager.Event()
+            
+            # 创建monitor对象
             monitor = ResultMonitor(
                 resource_path, 
-                simulation_address, 
+                simulation_address,
                 solution_name, 
                 simulation_name, 
-                file_types=file_types, 
-                file_suffix=file_suffix
+                file_types=file_types,
+                file_suffix=file_suffix,
+                process_group_config={
+                    "group_type": config_info["group_type"],
+                    "process_configs": config_info["process_configs"],
+                    "resource_path": resource_path,
+                    "shared_config": config_info["shared_config"]
+                },
+                stop_event=stop_event
             )
+            
+            # 创建并启动monitor进程
             monitor_proc = multiprocessing.Process(target=monitor.run)
-            
-            # 启动进程组内所有进程
-            procs = group["processes"]
-            for proc in procs.values():
-                if not proc.is_alive():
-                    proc.start()
-            
-            # 启动monitor进程
             monitor_proc.start()
             
-            # 记录所有进程（包括monitor）
-            all_procs = dict(procs)
-            all_procs["monitor"] = monitor_proc
-            self.processes[key] = all_procs
+            # 保存monitor对象和进程
+            monitor_info = {}
+            monitor_info["monitor_obj"] = monitor
+            monitor_info["monitor_proc"] = monitor_proc
+            monitor_info["manager"] = manager
+            monitor_info["stop_event"] = stop_event  # 保存停止信号
+            self.monitors[key] = monitor_info
+            
+            # 只记录monitor进程
+            self.processes[key] = {"monitor": monitor_proc}
             return True
         
     def stop_simulation(self, solution_name, simulation_name):
         key = self._get_key(solution_name, simulation_name)
+        group_id = f"{solution_name}_{simulation_name}"
         with self.lock:
-            if key in self.processes:
-                procs = self.processes[key]
-                for proc in procs.values():
-                    if proc.is_alive():
-                        proc.terminate()
-                        proc.join()
-                del self.processes[key]
-            # TODO: 删除资源路径
+            # 通过Event信号停止monitor进程
+            if key in self.monitors:
+                monitor_info = self.monitors[key]
+                monitor_proc = monitor_info["monitor_proc"]
+                stop_event = monitor_info["stop_event"]
+                
+                print(f"发送停止信号给monitor: {group_id}")
+                stop_event.set()  # 设置停止信号
+                
+                # 等待进程退出
+                if monitor_proc and monitor_proc.is_alive():
+                    monitor_proc.join(timeout=10)  # 等待最多10秒
+                    if monitor_proc.is_alive():
+                        print(f"Monitor进程未能在10秒内退出，强制终止...")
+                        monitor_proc.terminate()
+                        monitor_proc.join(timeout=5)
+                        if monitor_proc.is_alive():
+                            print(f"强制杀死Monitor进程")
+                            monitor_proc.kill()
+                            monitor_proc.join()
+                
+                # 清理进程记录
+                if key in self.processes:
+                    del self.processes[key]
+                
+                # 重置monitor进程
+                monitor_info["monitor_proc"] = None
+                monitor_info["manager"] = None
+                monitor_info["stop_event"] = None
+                
             return True
         
     def pause_simulation(self, solution_name, simulation_name):

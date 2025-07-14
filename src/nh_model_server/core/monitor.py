@@ -1,11 +1,15 @@
 import os
 import time
+import multiprocessing
+import importlib
 import c_two as cc
 from icrms.isimulation import ISimulation, GridResult
+from src.nh_model_server.core.config import settings
 
 class ResultMonitor:
     """结果文件监控器"""
-    def __init__(self, resource_path: str, simulation_address: str, solution_name: str, simulation_name: str, file_types=None, file_suffix=None, start_step: int = 1):
+    def __init__(self, resource_path: str, simulation_address: str, solution_name: str, simulation_name: str, 
+                 file_types=None, file_suffix=None, start_step: int = 1, process_group_config=None, stop_event=None):
         self.resource_path = resource_path
         self.simulation_address = simulation_address
         self.solution_name = solution_name
@@ -14,22 +18,58 @@ class ResultMonitor:
         self.file_types = file_types
         self.file_suffix = file_suffix
         self.current_step = start_step  # 当前监控的step
+        self.process_group_config = process_group_config  # 进程组配置
+        self.child_processes = {}  # 子进程字典
+        self.manager = None  # multiprocessing.Manager实例
+        self.shared = None  # 共享对象字典
+        self.stop_event = stop_event  # 跨进程停止信号
 
     def run(self):
         """以进程方式运行监控循环"""
         self.running = True
-        while self.running:
-            try:
-                self._check_result_files()
-                time.sleep(1)  # 每秒检查一次
-            except Exception as e:
-                print(f"监控进程异常: {e}")
-                time.sleep(5)  # 异常时等待更长时间
+        try:
+            # 启动时先创建子进程
+            if self.process_group_config:
+                self._start_child_processes()
+            
+            while self.running:
+                try:
+                    # 检查停止信号
+                    if self.stop_event and self.stop_event.is_set():
+                        print("Monitor收到停止信号，开始退出...")
+                        self.running = False
+                        break
+                    
+                    self._check_result_files()
+                    if not self.running:  # 检查是否需要退出
+                        break
+                    time.sleep(1)  # 每秒检查一次
+                except Exception as e:
+                    print(f"监控进程异常: {e}")
+                    time.sleep(5)  # 异常时等待更长时间
+        finally:
+            # 清理子进程
+            self._cleanup_child_processes()
+            # 清理manager
+            self._cleanup_manager()
+            print(f"Monitor进程 {self.solution_name}_{self.simulation_name} 已退出")
+            # 确保进程能够正常退出
+            os._exit(0)
 
     def _check_result_files(self):
-        """只监测当前step文件夹，发现.done后处理并current_step+1"""
+        """检测当前step文件夹和all.done文件"""
         if not os.path.exists(self.resource_path):
             return
+        
+        # 检查all.done文件，如果存在则清理所有进程并退出
+        all_done_file = os.path.join(self.resource_path, 'all.done')
+        if os.path.exists(all_done_file):
+            print("检测到all.done文件，开始清理进程组...")
+            self._cleanup_child_processes()
+            self.running = False
+            return
+        
+        # 检查当前step的.done文件
         step_name = "step" + str(self.current_step)
         step_dir = os.path.join(self.resource_path, step_name)
         if not os.path.isdir(step_dir):
@@ -72,3 +112,111 @@ class ResultMonitor:
                 print(f"结果已发送到simulation, step: {step}, result: {result}")
         except Exception as e:
             print(f"发送结果到simulation时出错: {e}")
+    
+    def stop(self):
+        """停止监控"""
+        print("检测到停止信号，开始清理进程组...")
+        self._cleanup_child_processes()
+        self.running = False
+        return
+
+    def _start_child_processes(self):
+        """根据配置创建并启动子进程"""
+        if not self.process_group_config:
+            return
+        
+        try:
+            # 获取进程配置
+            process_configs = self.process_group_config.get("process_configs", [])
+            shared_config = self.process_group_config.get("shared_config", [])
+            
+            # 在monitor进程内部重新创建共享对象
+            shared = self._build_shared_structure(shared_config)
+            
+            print(f"Monitor正在创建 {len(process_configs)} 个子进程...")
+            
+            # 根据配置创建每个进程
+            for proc_config in process_configs:
+                proc_name = proc_config["name"]
+                script_path = proc_config["script"]
+                entrypoint = proc_config["entrypoint"]
+                proc_params = proc_config["params"].copy()
+                
+                # 替换特殊参数
+                if "shared" in proc_params and proc_params["shared"] == "shared":
+                    proc_params["shared"] = self.shared
+                
+                # 动态导入模块和函数
+                if not os.path.isabs(script_path):
+                    module_path = settings.MODEL_PATH + "." + script_path
+                else:
+                    module_path = script_path
+                
+                module = importlib.import_module(module_path)
+                entrypoint_func = getattr(module, entrypoint)
+                
+                # 创建并启动进程
+                proc = multiprocessing.Process(target=entrypoint_func, kwargs=proc_params)
+                print(f"启动子进程: {proc_name}")
+                proc.start()
+                self.child_processes[proc_name] = proc
+                
+            print("所有子进程启动完成")
+            
+        except Exception as e:
+            print(f"启动子进程时出错: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _build_shared_structure(self, shared_config):
+        """在monitor进程内部构建共享对象"""
+        if not self.manager:
+            self.manager = multiprocessing.Manager()
+        
+        self.shared = {}
+        for item in shared_config:
+            name, typ = item["name"], item["type"]
+            if typ == "dict":
+                self.shared[name] = self.manager.dict()
+            elif typ == "Event":
+                self.shared[name] = self.manager.Event()
+            elif typ == "Lock":
+                self.shared[name] = self.manager.Lock()
+            else:
+                raise ValueError(f"Unsupported shared type: {typ}")
+        return self.shared
+    
+    def _cleanup_child_processes(self):
+        """清理所有子进程"""
+        if not self.child_processes:
+            print("没有子进程需要清理")
+            return
+        
+        try:
+            print("Monitor开始清理子进程...")
+            for proc_name, proc in self.child_processes.items():
+                if proc.is_alive():
+                    print(f"正在终止子进程: {proc_name}")
+                    proc.terminate()
+                    proc.join(timeout=5)  # 等待最多5秒
+                    if proc.is_alive():
+                        print(f"强制杀死子进程: {proc_name}")
+                        proc.kill()
+                        proc.join()
+                else:
+                    print(f"子进程 {proc_name} 已经停止")
+            print("所有子进程清理完成")
+        except Exception as e:
+            print(f"清理子进程时出错: {e}")
+    
+    def _cleanup_manager(self):
+        """清理manager资源"""
+        try:
+            if self.manager:
+                print("清理Manager资源...")
+                self.manager.shutdown()
+                self.manager = None
+                self.shared = None
+                print("Manager清理完成")
+        except Exception as e:
+            print(f"清理Manager时出错: {e}")
