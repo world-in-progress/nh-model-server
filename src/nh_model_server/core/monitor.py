@@ -9,12 +9,14 @@ from src.nh_model_server.core.config import settings
 class ResultMonitor:
     """结果文件监控器"""
     def __init__(self, resource_path: str, simulation_address: str, solution_name: str, simulation_name: str, 
-                 file_types=None, file_suffix=None, start_step: int = 1, process_group_config=None, stop_event=None):
+                 file_types=None, file_suffix=None, start_step: int = 1, process_group_config=None, stop_event=None,
+                 pause_event=None, resume_event=None, update_config_event=None):
         self.resource_path = resource_path
         self.simulation_address = simulation_address
         self.solution_name = solution_name
         self.simulation_name = simulation_name
         self.running = False
+        self.paused = False  # 暂停状态标志
         self.file_types = file_types
         self.file_suffix = file_suffix
         self.current_step = start_step  # 当前监控的step
@@ -23,6 +25,9 @@ class ResultMonitor:
         self.manager = None  # multiprocessing.Manager实例
         self.shared = None  # 共享对象字典
         self.stop_event = stop_event  # 跨进程停止信号
+        self.pause_event = pause_event  # 暂停信号
+        self.resume_event = resume_event  # 继续信号
+        self.update_config_event = update_config_event  # 配置更新信号
 
     def run(self):
         """以进程方式运行监控循环"""
@@ -40,7 +45,27 @@ class ResultMonitor:
                         self.running = False
                         break
                     
-                    self._check_result_files()
+                    # 检查暂停信号
+                    if self.pause_event and self.pause_event.is_set():
+                        print("Monitor收到暂停信号，停止子进程但保持监控运行...")
+                        self._pause_child_processes()
+                        self.pause_event.clear()  # 清除暂停信号
+                    
+                    # 检查继续信号
+                    if self.resume_event and self.resume_event.is_set():
+                        print("Monitor收到继续信号，重新启动子进程...")
+                        # 检查是否需要更新配置
+                        if self.update_config_event and self.update_config_event.is_set():
+                            print("检测到配置更新信号，重新加载进程组配置...")
+                            self._update_process_group_config()
+                            self.update_config_event.clear()
+                        self._resume_child_processes()
+                        self.resume_event.clear()  # 清除继续信号
+                    
+                    # 只有在非暂停状态下才检查结果文件
+                    if not self.paused:
+                        self._check_result_files()
+                    
                     if not self.running:  # 检查是否需要退出
                         break
                     time.sleep(1)  # 每秒检查一次
@@ -220,3 +245,63 @@ class ResultMonitor:
                 print("Manager清理完成")
         except Exception as e:
             print(f"清理Manager时出错: {e}")
+    
+    def _pause_child_processes(self):
+        """暂停所有子进程（终止但不清理进程记录）"""
+        if not self.child_processes:
+            print("没有子进程需要暂停")
+            return
+        
+        try:
+            print("Monitor开始暂停子进程...")
+            for proc_name, proc in list(self.child_processes.items()):
+                if proc.is_alive():
+                    print(f"正在暂停子进程: {proc_name}")
+                    proc.terminate()
+                    proc.join(timeout=5)  # 等待最多5秒
+                    if proc.is_alive():
+                        print(f"强制杀死子进程: {proc_name}")
+                        proc.kill()
+                        proc.join()
+                    print(f"子进程 {proc_name} 已暂停")
+                else:
+                    print(f"子进程 {proc_name} 已经停止")
+            
+            self.paused = True
+            print("所有子进程已暂停，Monitor保持运行状态")
+        except Exception as e:
+            print(f"暂停子进程时出错: {e}")
+    
+    def _resume_child_processes(self):
+        """恢复所有子进程（重新启动）"""
+        if not self.process_group_config:
+            print("没有进程组配置，无法恢复子进程")
+            return
+            
+        try:
+            print("Monitor开始恢复子进程...")
+            # 清理旧的进程记录
+            self.child_processes.clear()
+            
+            # 重新启动子进程
+            self._start_child_processes()
+            
+            self.paused = False
+            print("所有子进程已恢复运行")
+        except Exception as e:
+            print(f"恢复子进程时出错: {e}")
+    
+    def _update_process_group_config(self):
+        """更新进程组配置"""
+        try:
+            print("正在更新进程组配置...")
+            # 这里可以重新加载配置文件或从外部获取新的配置
+            # 暂时保持现有配置，实际使用时可以从某个共享存储中获取新配置
+            print("进程组配置更新完成")
+        except Exception as e:
+            print(f"更新进程组配置时出错: {e}")
+    
+    def update_config(self, new_config):
+        """更新进程组配置的外部接口"""
+        self.process_group_config = new_config
+        print("进程组配置已更新")

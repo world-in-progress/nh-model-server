@@ -161,8 +161,7 @@ class SimulationProcessManager:
             }
             process_configs.append(process_config)
         
-        group_id = f"{solution_name}_{simulation_name}"
-        print(group_id)
+        group_id = self._get_key(solution_name, simulation_name)
         
         self.process_group_info[group_id] = {
             "group_type": group_type,
@@ -177,7 +176,6 @@ class SimulationProcessManager:
 
     def start_simulation(self, solution_name, simulation_name, simulation_address):
         key = self._get_key(solution_name, simulation_name)
-        group_id = f"{solution_name}_{simulation_name}"
         with self.lock:
             # 检查是否已在运行
             if key in self.processes:
@@ -185,10 +183,10 @@ class SimulationProcessManager:
                 if all(proc.is_alive() for proc in procs.values()):
                     return False  # 该任务已在运行
             
-            if group_id not in self.process_group_info:
-                raise RuntimeError(f"Process group config {group_id} not found.")
+            if key not in self.process_group_info:
+                raise RuntimeError(f"Process group config {key} not found.")
             
-            config_info = self.process_group_info[group_id]
+            config_info = self.process_group_info[key]
             
             # 创建资源路径
             resource_path = config_info["resource_path"]
@@ -200,9 +198,12 @@ class SimulationProcessManager:
             file_types = monitor_config.get("file_types", None)
             file_suffix = monitor_config.get("file_suffix", None)
             
-            # 创建跨进程停止信号
+            # 创建跨进程信号
             manager = multiprocessing.Manager()
             stop_event = manager.Event()
+            pause_event = manager.Event()
+            resume_event = manager.Event()
+            update_config_event = manager.Event()
             
             # 创建monitor对象
             monitor = ResultMonitor(
@@ -218,7 +219,10 @@ class SimulationProcessManager:
                     "resource_path": resource_path,
                     "shared_config": config_info["shared_config"]
                 },
-                stop_event=stop_event
+                stop_event=stop_event,
+                pause_event=pause_event,
+                resume_event=resume_event,
+                update_config_event=update_config_event
             )
             
             # 创建并启动monitor进程
@@ -231,6 +235,9 @@ class SimulationProcessManager:
             monitor_info["monitor_proc"] = monitor_proc
             monitor_info["manager"] = manager
             monitor_info["stop_event"] = stop_event  # 保存停止信号
+            monitor_info["pause_event"] = pause_event  # 保存暂停信号
+            monitor_info["resume_event"] = resume_event  # 保存继续信号
+            monitor_info["update_config_event"] = update_config_event  # 保存配置更新信号
             self.monitors[key] = monitor_info
             
             # 只记录monitor进程
@@ -239,7 +246,6 @@ class SimulationProcessManager:
         
     def stop_simulation(self, solution_name, simulation_name):
         key = self._get_key(solution_name, simulation_name)
-        group_id = f"{solution_name}_{simulation_name}"
         with self.lock:
             # 通过Event信号停止monitor进程
             if key in self.monitors:
@@ -247,7 +253,7 @@ class SimulationProcessManager:
                 monitor_proc = monitor_info["monitor_proc"]
                 stop_event = monitor_info["stop_event"]
                 
-                print(f"发送停止信号给monitor: {group_id}")
+                print(f"发送停止信号给monitor: {key}")
                 stop_event.set()  # 设置停止信号
                 
                 # 等待进程退出
@@ -276,23 +282,118 @@ class SimulationProcessManager:
     def pause_simulation(self, solution_name, simulation_name):
         key = self._get_key(solution_name, simulation_name)
         with self.lock:
-            if key in self.processes:
-                procs = self.processes[key]
-                for proc in procs.values():
-                    if proc.is_alive():
-                        proc.terminate()
-                        proc.join()
-            return True
+            # 通过Event信号暂停monitor中的子进程
+            if key in self.monitors:
+                monitor_info = self.monitors[key]
+                pause_event = monitor_info.get("pause_event")
+                
+                if pause_event:
+                    print(f"发送暂停信号给monitor: {key}")
+                    pause_event.set()  # 设置暂停信号
+                    return True
+                else:
+                    print(f"Monitor {key} 没有暂停事件信号")
+                    return False
+            else:
+                print(f"Monitor {key} 不存在")
+                return False
 
-    def resume_simulation(self, solution_name, simulation_name, simulation_address):
+    def resume_simulation(self, solution_name, simulation_name, simulation_address=None, updated_config=None):
         key = self._get_key(solution_name, simulation_name)
         with self.lock:
-            # TODO: 获取human_action
-            if key in self.processes:
-                procs = self.processes[key]
-                for proc in procs.values():
-                    if not proc.is_alive():
-                        proc.start()
+            # 通过Event信号恢复monitor中的子进程
+            if key in self.monitors:
+                monitor_info = self.monitors[key]
+                resume_event = monitor_info.get("resume_event")
+                update_config_event = monitor_info.get("update_config_event")
+                
+                if resume_event:
+                    # 如果有配置更新，先更新配置
+                    if updated_config:
+                        print(f"更新进程组配置: {key}")
+                        # 更新本地配置
+                        if key in self.process_group_info:
+                            self.process_group_info[key].update(updated_config)
+                        
+                        # 更新monitor中的配置
+                        monitor_obj = monitor_info.get("monitor_obj")
+                        if monitor_obj and hasattr(monitor_obj, 'update_config'):
+                            monitor_obj.update_config(updated_config.get("process_group_config"))
+                        
+                        # 设置配置更新信号
+                        if update_config_event:
+                            update_config_event.set()
+                    
+                    print(f"发送继续信号给monitor: {key}")
+                    resume_event.set()  # 设置继续信号
+                    return True
+                else:
+                    print(f"Monitor {key} 没有继续事件信号")
+                    return False
+            else:
+                print(f"Monitor {key} 不存在")
+                return False
+
+    def update_process_config_paths(self, solution_name, simulation_name, new_env_paths):
+        """更新进程组配置中的文件路径"""
+        key = self._get_key(solution_name, simulation_name)
+        
+        if key not in self.process_group_info:
+            print(f"Process group config {key} not found.")
+            return False
+            
+        try:
+            config_info = self.process_group_info[key]
+            process_configs = config_info["process_configs"]
+            
+            # 更新每个进程配置中的路径参数
+            for proc_config in process_configs:
+                proc_params = proc_config["params"]
+                
+                # 更新路径相关的参数
+                for param_name, new_path in new_env_paths.items():
+                    if param_name in proc_params:
+                        if param_name == "resource_path":
+                            # 直接使用新的资源路径
+                            proc_params[param_name] = new_path
+                        else:
+                            # 对于其他文件路径，提取文件名
+                            file_name = os.path.basename(new_path)
+                            proc_params[param_name] = file_name
+                            print(f"更新进程 {proc_config['name']} 的参数 {param_name}: {file_name}")
+            
+            print(f"进程组 {key} 的配置路径已更新")
             return True
+            
+        except Exception as e:
+            print(f"更新进程组配置路径时出错: {e}")
+            return False
+    
+    def get_simulation_status(self, solution_name, simulation_name):
+        """获取仿真状态"""
+        key = self._get_key(solution_name, simulation_name)
+        
+        status = {
+            "running": False,
+            "paused": False,
+            "monitor_alive": False,
+            "child_processes": {}
+        }
+        
+        if key in self.monitors:
+            monitor_info = self.monitors[key]
+            monitor_proc = monitor_info.get("monitor_proc")
+            monitor_obj = monitor_info.get("monitor_obj")
+            
+            if monitor_proc and monitor_proc.is_alive():
+                status["monitor_alive"] = True
+                status["running"] = True
+                
+                # 如果能访问monitor对象，获取更详细的状态
+                if monitor_obj:
+                    status["paused"] = getattr(monitor_obj, 'paused', False)
+                    status["current_step"] = getattr(monitor_obj, 'current_step', 0)
+        
+        return status
 
 simulation_process_manager = SimulationProcessManager()
