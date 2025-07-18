@@ -26,6 +26,10 @@ class CloneEnvRequest(BaseModel):
     solution_name: str
     solution_address: str
 
+class CloneActionRequest(BaseModel):
+    solution_name: str
+    solution_address: str
+
 class BuildProcessGroupRequest(BaseModel):
     solution_name: str
     simulation_name: str

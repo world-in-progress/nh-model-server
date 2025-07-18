@@ -1,12 +1,12 @@
-from fastapi import APIRouter, Body, BackgroundTasks, HTTPException
-from src.nh_model_server.schemas.model import Signal, SignalType, SolutionCheckRequest, CloneEnvRequest, BuildProcessGroupRequest, StartSimulationRequest, StopSimulationRequest, PauseSimulationRequest, ResumeSimulationRequest
-from src.nh_model_server.core.simulation import simulation_process_manager
-from src.nh_model_server.core.task import task_manager, TaskStatus
+import os
+import json
 import c_two as cc
 from icrms.isolution import ISolution
-import os
 from src.nh_model_server.core.config import settings
-import time
+from src.nh_model_server.core.task import task_manager, TaskStatus
+from fastapi import APIRouter, Body, BackgroundTasks, HTTPException
+from src.nh_model_server.core.simulation import simulation_process_manager
+from src.nh_model_server.schemas.model import CloneActionRequest, Signal, SignalType, SolutionCheckRequest, CloneEnvRequest, BuildProcessGroupRequest, StartSimulationRequest, StopSimulationRequest, PauseSimulationRequest, ResumeSimulationRequest
 
 router = APIRouter(prefix='/model', tags=['model'])
 
@@ -126,7 +126,30 @@ def clone_progress(task_id: str):
 def list_tasks():
     return task_manager.list_tasks()
 
-# 3. 构建进程组
+# 3. 获取action
+@router.post('/clone_actions')
+def clone_actions(req: CloneActionRequest):
+    try:
+        with cc.compo.runtime.connect_crm(req.solution_address, ISolution) as solution:
+            actions = solution.get_human_actions()
+            if not actions:
+                return {"status": "success", "message": "No actions found"}
+            action_dir = os.path.join(settings.RESOURCE_PATH, req.solution_name, 'actions')
+            os.makedirs(action_dir, exist_ok=True)
+            
+            for action in actions:
+                action_id = action.get('action_id')
+                if not action_id:
+                    continue
+                action_file = os.path.join(action_dir, f"{action_id}.json")
+                with open(action_file, "w", encoding="utf-8") as f:
+                    json.dump(action, f, ensure_ascii=False, indent=4)
+                    
+        return {"status": "success", "message": f"Saved {len(actions)} actions"}
+    except Exception as e:
+        return {"status": "fail", "message": str(e)}
+
+# 4. 构建进程组
 @router.post('/build_process_group')
 def build_process_group(req: BuildProcessGroupRequest):
     try:
@@ -137,7 +160,7 @@ def build_process_group(req: BuildProcessGroupRequest):
     except Exception as e:
         return {"result": "fail", "error": str(e)}
 
-# 4. 启动模拟
+# 5. 启动模拟
 @router.post('/start_simulation')
 def start_simulation(req: StartSimulationRequest):
     ok = simulation_process_manager.start_simulation(
@@ -145,7 +168,7 @@ def start_simulation(req: StartSimulationRequest):
     )
     return {"result": "started" if ok else "already running"}
 
-# 5. 结束模拟
+# 6. 结束模拟
 @router.post('/stop_simulation')
 def stop_simulation(req: StopSimulationRequest):
     ok = simulation_process_manager.stop_simulation(
@@ -153,7 +176,7 @@ def stop_simulation(req: StopSimulationRequest):
     )
     return {"result": "stopped" if ok else "not running"}
 
-# 6. 暂停模拟
+# 7. 暂停模拟
 @router.post('/pause_simulation')
 def pause_simulation(req: PauseSimulationRequest):
     ok = simulation_process_manager.pause_simulation(
@@ -161,7 +184,7 @@ def pause_simulation(req: PauseSimulationRequest):
     )
     return {"result": "paused" if ok else "not running"}
 
-# 7. 恢复模拟
+# 8. 恢复模拟
 @router.post('/resume_simulation')
 def resume_simulation(req: ResumeSimulationRequest):
     ok = simulation_process_manager.resume_simulation(

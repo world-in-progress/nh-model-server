@@ -144,7 +144,7 @@ class SimulationProcessManager:
                 elif pname == "step":
                     proc_params[pname] = 0
                 elif pname == "flag":
-                    proc_params[pname] = 0
+                    proc_params[pname] = 1
                 elif pname in env:
                     origin_path = env[pname]
                     file_name = os.path.basename(origin_path)
