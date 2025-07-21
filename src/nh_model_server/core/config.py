@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     RESOURCE_SERVER_PROXY_ADDRESS: str = 'http://localhost:9000/api/proxy/discover'
 
     # DB configuration
-    DB_PATH: str = str(ROOT_DIR / 'db')
+    PERSISTENCE_PATH: str = str(ROOT_DIR / 'persistence')
 
     # CORS
     CORS_ORIGINS: list[str] = ['*']

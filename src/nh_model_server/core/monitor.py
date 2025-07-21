@@ -5,12 +5,13 @@ import importlib
 import c_two as cc
 from icrms.isimulation import ISimulation, GridResult
 from src.nh_model_server.core.config import settings
+from persistence.parser_manager import ParserManager
 
 class ResultMonitor:
     """结果文件监控器"""
     def __init__(self, resource_path: str, simulation_address: str, solution_name: str, simulation_name: str, 
                  file_types=None, file_suffix=None, start_step: int = 1, process_group_config=None, stop_event=None,
-                 pause_event=None, resume_event=None, update_config_event=None):
+                 pause_event=None, resume_event=None, update_config_event=None, file_paths=None):
         self.resource_path = resource_path
         self.simulation_address = simulation_address
         self.solution_name = solution_name
@@ -28,6 +29,54 @@ class ResultMonitor:
         self.pause_event = pause_event  # 暂停信号
         self.resume_event = resume_event  # 继续信号
         self.update_config_event = update_config_event  # 配置更新信号
+        self.file_paths = file_paths or {}  # 数据文件路径
+        
+        # 初始化解析器管理器
+        self.parser_manager = None
+        self._init_parser_manager()
+
+    def _init_parser_manager(self):
+        """初始化解析器管理器"""
+        try:
+            if self.process_group_config:
+                parser_config = self.process_group_config.get("parser_config")
+                if parser_config:
+                    group_type = self.process_group_config.get("group_type", "unknown")
+                    self.parser_manager = ParserManager(group_type, parser_config)
+                    print(f"解析器管理器初始化成功: {group_type}")
+                else:
+                    print("警告: 进程组配置中没有parser_config")
+            else:
+                print("警告: 没有进程组配置")
+        except Exception as e:
+            print(f"初始化解析器管理器失败: {e}")
+            self.parser_manager = None
+
+    def refresh_and_parse_data(self):
+        """刷新并解析数据，应用最新actions"""
+        try:
+            if not self.parser_manager:
+                print("警告: 解析器管理器未初始化")
+                return None
+                
+            # 构建完整的文件路径
+            solution_path = os.path.dirname(self.resource_path)
+            full_file_paths = {}
+            
+            for data_type, file_name in self.file_paths.items():
+                if file_name:
+                    full_path = os.path.join(solution_path, file_name)
+                    full_file_paths[data_type] = full_path
+            
+            # 刷新数据：解析文件 + 加载actions + 应用actions
+            model_input_data = self.parser_manager.refresh_data(full_file_paths, solution_path)
+            
+            print(f"数据刷新完成，解析了 {len(full_file_paths)} 个文件")
+            return model_input_data
+            
+        except Exception as e:
+            print(f"刷新和解析数据时出错: {e}")
+            return None
 
     def run(self):
         """以进程方式运行监控循环"""
@@ -160,16 +209,25 @@ class ResultMonitor:
             
             print(f"Monitor正在创建 {len(process_configs)} 个子进程...")
             
+            # 刷新并解析数据
+            model_input_data = self.refresh_and_parse_data()
+            
             # 根据配置创建每个进程
             for proc_config in process_configs:
                 proc_name = proc_config["name"]
                 script_path = proc_config["script"]
                 entrypoint = proc_config["entrypoint"]
                 proc_params = proc_config["params"].copy()
+
+                print(proc_params)
                 
                 # 替换特殊参数
                 if "shared" in proc_params and proc_params["shared"] == "shared":
                     proc_params["shared"] = self.shared
+                
+                # 如果有model_data参数，传入解析后的数据
+                if "model_data" in proc_params:
+                    proc_params["model_data"] = model_input_data
                 
                 # 动态导入模块和函数
                 if not os.path.isabs(script_path):
@@ -283,7 +341,7 @@ class ResultMonitor:
             # 清理旧的进程记录
             self.child_processes.clear()
             
-            # 重新启动子进程
+            # 重新启动子进程（会自动刷新数据和应用最新actions）
             self._start_child_processes()
             
             self.paused = False
@@ -305,3 +363,8 @@ class ResultMonitor:
         """更新进程组配置的外部接口"""
         self.process_group_config = new_config
         print("进程组配置已更新")
+    
+    def update_file_paths(self, new_file_paths):
+        """更新数据文件路径"""
+        self.file_paths = new_file_paths
+        print(f"数据文件路径已更新: {new_file_paths}")

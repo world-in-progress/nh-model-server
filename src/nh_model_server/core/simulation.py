@@ -1,13 +1,9 @@
-import multiprocessing
-import threading
 import os
-from pathlib import Path
-from src.nh_model_server.core.monitor import ResultMonitor
 import json
+import threading
+import multiprocessing
 from src.nh_model_server.core.config import settings
-
-from model.coupled_0703.Flood_new import run_flood
-from model.coupled_0703.pipe_NH import run_pipe_simulation
+from src.nh_model_server.core.monitor import ResultMonitor
 
 class SimulationProcessManager:
     def __init__(self):
@@ -21,97 +17,9 @@ class SimulationProcessManager:
     def _get_key(self, solution_name, simulation_name):
         return (solution_name, simulation_name)
 
-    def start(self, solution_name, simulation_name, solution_data, resource_path, simulation_address=None, step=None):
-        key = self._get_key(solution_name, simulation_name)
-        with self.lock:
-            if key in self.processes:
-                procs = self.processes[key]
-                if all(proc.poll() is None for proc in procs.values()):
-                    return False  # 该任务已在运行
-
-            inp_data = solution_data.get('inp_data')
-            inp_path = Path(resource_path)/f"{simulation_name}.inp"
-            with open(inp_path, 'w', encoding='utf-8') as f:
-                f.write(inp_data)
-            solution_data['inp_path'] = inp_path
-
-            # 创建共享内存
-            manager = multiprocessing.Manager()
-            shared = {
-                '1d_data': manager.dict(),
-                '2d_data': manager.dict(),
-                '1d_ready': manager.Event(),
-                '2d_ready': manager.Event(),
-                'lock': manager.Lock(),
-            }
-            env = {}
-            env['manager'] = manager
-            env['shared'] = shared
-            self.envs[key] = env
-            
-            # 启动两个进程
-            flood_proc = multiprocessing.Process(
-                target=run_flood,
-                args=(shared, solution_data, resource_path, step, 0)
-            )
-            pipe_proc = multiprocessing.Process(
-                target=run_pipe_simulation,
-                args=(shared, inp_path, resource_path, step)
-            )
-            flood_proc.start()
-            pipe_proc.start()
-            # flood_proc.join()
-            # pipe_proc.join()
-
-            # monitor进程
-            monitor = ResultMonitor(resource_path, simulation_address, solution_name, simulation_name)
-            monitor_proc = multiprocessing.Process(target=monitor.run)
-            monitor_proc.start()
-            # monitor_proc.join()
-
-            procs = {}
-            procs['flood'] = flood_proc
-            procs['pipe'] = pipe_proc
-            procs['monitor'] = monitor_proc
-            self.processes[key] = procs
-            return True
-
-    def stop(self, solution_name, simulation_name):
-        key = self._get_key(solution_name, simulation_name)
-        with self.lock:
-            # 停止模拟进程组
-            procs = self.processes.get(key)
-            if procs:
-                for proc in procs.values():
-                    if proc.is_alive():
-                        proc.terminate()
-                        proc.join()
-                del self.processes[key]
-            env = self.envs.get(key)
-            if env:
-                env['manager'].shutdown()
-                del self.envs[key]
-            return True
-
-    def stop_all(self):
-        """停止所有进程和监控器"""
-        with self.lock:
-            # 停止所有进程组
-            for key, procs in list(self.processes.items()):
-                for proc in procs.values():
-                    if proc.is_alive():
-                        proc.terminate()
-                        proc.join()
-            self.processes.clear()
-            for env in self.envs.values():
-                env['manager'].shutdown()
-            self.envs.clear()
-
-    # 可以扩展 rollback, pause, resume 等方法，参数同理加上 key
-
     def load_process_group_configs(self, path=None):
         if path is None:
-            path = os.path.join(settings.DB_PATH, "process_group.json")
+            path = os.path.join(settings.PERSISTENCE_PATH, "process_group.json")
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
 
@@ -126,6 +34,22 @@ class SimulationProcessManager:
         if not config:
             raise ValueError(f"Unknown process group type: {group_type}")
         resource_path = settings.RESOURCE_PATH + "/" + solution_name + "/" + simulation_name
+        
+        # 构建数据文件路径映射
+        file_paths = {}
+        parser_config = config.get("parser_config", {})
+        data_parsers = parser_config.get("data_parsers", {})
+        
+        # 从env中构建文件路径映射，基于数据解析器中定义的数据类型
+        for env_key, file_path in env.items():
+            for data_type in data_parsers.keys():
+                # 根据env键名匹配数据类型
+                if (data_type in env_key.lower() or 
+                    env_key.lower().endswith(data_type) or 
+                    env_key.lower().endswith(f"{data_type}_path")):
+                    file_paths[data_type] = file_path
+                    print(f"映射数据类型 {data_type}: {env_key} -> {file_path}")
+                    break
         
         # 只保存进程配置，不创建真实的进程对象
         process_configs = []
@@ -145,12 +69,17 @@ class SimulationProcessManager:
                     proc_params[pname] = 0
                 elif pname == "flag":
                     proc_params[pname] = 1
+                elif pname == "model_data":
+                    proc_params[pname] = None  # 标记，在monitor中会传入解析后的数据
                 elif pname in env:
+                    # 保留原有的文件路径参数处理逻辑，以支持旧的模型接口
                     origin_path = env[pname]
                     file_name = os.path.basename(origin_path)
                     proc_params[pname] = file_name
                 else:
-                    raise ValueError(f"Missing parameter: {pname} for process {proc_name}")
+                    # 对于不在env中的参数，检查是否是已知的数据类型参数
+                    if pname not in ["shared", "resource_path", "step", "flag", "model_data"]:
+                        print(f"警告: 未找到参数 {pname} 的值")
             
             # 保存进程配置
             process_config = {
@@ -168,10 +97,13 @@ class SimulationProcessManager:
             "process_configs": process_configs,
             "resource_path": resource_path,
             "shared_config": config.get("shared", []),
-            "monitor_config": config.get("monitor_config", {})
+            "monitor_config": config.get("monitor_config", {}),
+            "parser_config": parser_config,  # 添加解析器配置
+            "file_paths": file_paths  # 添加文件路径映射
         }
         
         print(f"已构建进程组配置，包含 {len(process_configs)} 个进程配置")
+        print(f"数据文件映射: {file_paths}")
         return group_id
 
     def start_simulation(self, solution_name, simulation_name, simulation_address):
@@ -217,12 +149,14 @@ class SimulationProcessManager:
                     "group_type": config_info["group_type"],
                     "process_configs": config_info["process_configs"],
                     "resource_path": resource_path,
-                    "shared_config": config_info["shared_config"]
+                    "shared_config": config_info["shared_config"],
+                    "parser_config": config_info.get("parser_config", {})
                 },
                 stop_event=stop_event,
                 pause_event=pause_event,
                 resume_event=resume_event,
-                update_config_event=update_config_event
+                update_config_event=update_config_event,
+                file_paths=config_info.get("file_paths", {})
             )
             
             # 创建并启动monitor进程
@@ -345,6 +279,18 @@ class SimulationProcessManager:
         try:
             config_info = self.process_group_info[key]
             process_configs = config_info["process_configs"]
+            parser_config = config_info.get("parser_config", {})
+            data_parsers = parser_config.get("data_parsers", {})
+            
+            # 更新文件路径映射
+            file_paths = config_info.get("file_paths", {})
+            for param_name, new_path in new_env_paths.items():
+                # 更新文件路径映射
+                for data_type in data_parsers.keys():
+                    if data_type in param_name.lower() or param_name.lower().endswith(data_type):
+                        file_paths[data_type] = new_path
+                        print(f"更新数据类型 {data_type} 的文件路径: {new_path}")
+                        break
             
             # 更新每个进程配置中的路径参数
             for proc_config in process_configs:
@@ -361,6 +307,16 @@ class SimulationProcessManager:
                             file_name = os.path.basename(new_path)
                             proc_params[param_name] = file_name
                             print(f"更新进程 {proc_config['name']} 的参数 {param_name}: {file_name}")
+            
+            # 保存更新后的文件路径映射
+            config_info["file_paths"] = file_paths
+            
+            # 如果monitor正在运行，也更新monitor中的文件路径
+            if key in self.monitors:
+                monitor_info = self.monitors[key]
+                monitor_obj = monitor_info.get("monitor_obj")
+                if monitor_obj and hasattr(monitor_obj, 'update_file_paths'):
+                    monitor_obj.update_file_paths(file_paths)
             
             print(f"进程组 {key} 的配置路径已更新")
             return True
