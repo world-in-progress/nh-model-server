@@ -34,23 +34,12 @@ class SimulationProcessManager:
         if not config:
             raise ValueError(f"Unknown process group type: {group_type}")
         resource_path = settings.RESOURCE_PATH + "/" + solution_name + "/" + simulation_name
-        
-        # 构建数据文件路径映射
-        file_paths = {}
-        parser_config = config.get("parser_config", {})
-        data_parsers = parser_config.get("data_parsers", {})
-        
-        # 从env中构建文件路径映射，基于数据解析器中定义的数据类型
-        for env_key, file_path in env.items():
-            for data_type in data_parsers.keys():
-                # 根据env键名匹配数据类型
-                if (data_type in env_key.lower() or 
-                    env_key.lower().endswith(data_type) or 
-                    env_key.lower().endswith(f"{data_type}_path")):
-                    file_paths[data_type] = file_path
-                    print(f"映射数据类型 {data_type}: {env_key} -> {file_path}")
-                    break
-        
+
+        # 遍历env，将所有路径转为文件名
+        for key, value in env.items():
+            if value:
+                env[key] = os.path.basename(value)
+
         # 只保存进程配置，不创建真实的进程对象
         process_configs = []
         # proc_cfg是每一个进程的配置
@@ -98,12 +87,11 @@ class SimulationProcessManager:
             "resource_path": resource_path,
             "shared_config": config.get("shared", []),
             "monitor_config": config.get("monitor_config", {}),
-            "parser_config": parser_config,  # 添加解析器配置
-            "file_paths": file_paths  # 添加文件路径映射
+            "parser_config": config.get("parser_config", {}),
+            "env": env
         }
         
         print(f"已构建进程组配置，包含 {len(process_configs)} 个进程配置")
-        print(f"数据文件映射: {file_paths}")
         return group_id
 
     def start_simulation(self, solution_name, simulation_name, simulation_address):
@@ -124,11 +112,6 @@ class SimulationProcessManager:
             resource_path = config_info["resource_path"]
             os.makedirs(resource_path, exist_ok=True)
             print("资源路径创建成功！")
-
-            # 获取monitor配置
-            monitor_config = config_info["monitor_config"]
-            file_types = monitor_config.get("file_types", None)
-            file_suffix = monitor_config.get("file_suffix", None)
             
             # 创建跨进程信号
             manager = multiprocessing.Manager()
@@ -142,21 +125,12 @@ class SimulationProcessManager:
                 resource_path, 
                 simulation_address,
                 solution_name, 
-                simulation_name, 
-                file_types=file_types,
-                file_suffix=file_suffix,
-                process_group_config={
-                    "group_type": config_info["group_type"],
-                    "process_configs": config_info["process_configs"],
-                    "resource_path": resource_path,
-                    "shared_config": config_info["shared_config"],
-                    "parser_config": config_info.get("parser_config", {})
-                },
+                simulation_name,
+                config_info,
                 stop_event=stop_event,
                 pause_event=pause_event,
                 resume_event=resume_event,
-                update_config_event=update_config_event,
-                file_paths=config_info.get("file_paths", {})
+                update_config_event=update_config_event
             )
             
             # 创建并启动monitor进程

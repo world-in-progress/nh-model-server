@@ -10,16 +10,14 @@ from persistence.parser_manager import ParserManager
 class ResultMonitor:
     """结果文件监控器"""
     def __init__(self, resource_path: str, simulation_address: str, solution_name: str, simulation_name: str, 
-                 file_types=None, file_suffix=None, start_step: int = 1, process_group_config=None, stop_event=None,
-                 pause_event=None, resume_event=None, update_config_event=None, file_paths=None):
+                 process_group_config=None, start_step: int = 1, stop_event=None,
+                 pause_event=None, resume_event=None, update_config_event=None):
         self.resource_path = resource_path
         self.simulation_address = simulation_address
         self.solution_name = solution_name
         self.simulation_name = simulation_name
         self.running = False
         self.paused = False  # 暂停状态标志
-        self.file_types = file_types
-        self.file_suffix = file_suffix
         self.current_step = start_step  # 当前监控的step
         self.process_group_config = process_group_config  # 进程组配置
         self.child_processes = {}  # 子进程字典
@@ -29,8 +27,11 @@ class ResultMonitor:
         self.pause_event = pause_event  # 暂停信号
         self.resume_event = resume_event  # 继续信号
         self.update_config_event = update_config_event  # 配置更新信号
-        self.file_paths = file_paths or {}  # 数据文件路径
-        
+
+        self.file_types = process_group_config.get("monitor_config", {}).get("file_types", [])
+        self.file_suffix = process_group_config.get("monitor_config", {}).get("file_suffix", {})
+        self.env = process_group_config.get("env", {})
+
         # 初始化解析器管理器
         self.parser_manager = None
         self._init_parser_manager()
@@ -61,17 +62,17 @@ class ResultMonitor:
                 
             # 构建完整的文件路径
             solution_path = os.path.dirname(self.resource_path)
-            full_file_paths = {}
+            full_env = {}
             
-            for data_type, file_name in self.file_paths.items():
+            for data_type, file_name in self.env.items():
                 if file_name:
                     full_path = os.path.join(solution_path, file_name)
-                    full_file_paths[data_type] = full_path
+                    full_env[data_type] = full_path
             
             # 刷新数据：解析文件 + 加载actions + 应用actions
-            model_input_data = self.parser_manager.refresh_data(full_file_paths, solution_path)
+            model_input_data = self.parser_manager.refresh_data(full_env, solution_path)
             
-            print(f"数据刷新完成，解析了 {len(full_file_paths)} 个文件")
+            print(f"数据刷新完成，解析了 {len(full_env)} 个文件")
             return model_input_data
             
         except Exception as e:
@@ -364,7 +365,7 @@ class ResultMonitor:
         self.process_group_config = new_config
         print("进程组配置已更新")
     
-    def update_file_paths(self, new_file_paths):
+    def update_env(self, new_env):
         """更新数据文件路径"""
-        self.file_paths = new_file_paths
-        print(f"数据文件路径已更新: {new_file_paths}")
+        self.env = new_env
+        print(f"数据文件路径已更新: {new_env}")
