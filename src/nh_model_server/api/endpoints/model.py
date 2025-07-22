@@ -2,11 +2,18 @@ import os
 import json
 import c_two as cc
 from icrms.isolution import ISolution
+from icrms.isimulation import ISimulation
 from src.nh_model_server.core.config import settings
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from src.nh_model_server.core.task import task_manager, TaskStatus
 from src.nh_model_server.core.simulation import simulation_process_manager
-from src.nh_model_server.schemas.model import CloneActionRequest, SolutionCheckRequest, CloneEnvRequest, BuildProcessGroupRequest, StartSimulationRequest, StopSimulationRequest, PauseSimulationRequest, ResumeSimulationRequest
+from src.nh_model_server.schemas.model import (
+    CloneActionRequest, SolutionCheckRequest, CloneEnvRequest, 
+    BuildProcessGroupRequest, StartSimulationRequest, StopSimulationRequest, 
+    PauseSimulationRequest, ResumeSimulationRequest,
+    GetCompletedStepsRequest, GetStepResultRequest, 
+    CheckStepReadyRequest, GetSimulationStatusRequest, AddHumanActionRequest
+)
 
 router = APIRouter(prefix='/model', tags=['model'])
 
@@ -112,13 +119,14 @@ def build_process_group(req: BuildProcessGroupRequest):
 @router.post('/start_simulation')
 def start_simulation(req: StartSimulationRequest):
     ok = simulation_process_manager.start_simulation(
-        req.solution_name, req.simulation_name, req.simulation_address
+        req.solution_name, req.simulation_name
     )
     return {"result": "started" if ok else "already running"}
 
 # 6. 结束模拟
 @router.post('/stop_simulation')
 def stop_simulation(req: StopSimulationRequest):
+    print("Stopping simulation:", req.simulation_name)
     ok = simulation_process_manager.stop_simulation(
         req.solution_name, req.simulation_name
     )
@@ -139,3 +147,81 @@ def resume_simulation(req: ResumeSimulationRequest):
         req.solution_name, req.simulation_name, req.simulation_address
     )
     return {"result": "resumed" if ok else "not running"}
+
+# 9. 获取已完成步骤列表
+@router.post('/get_completed_steps')
+def get_completed_steps(req: GetCompletedStepsRequest):
+    try:
+        with cc.compo.runtime.connect_crm(req.simulation_address, ISimulation) as simulation:
+            completed_steps = simulation.get_completed_steps()
+            return {
+                "result": "success", 
+                "completed_steps": completed_steps,
+                "count": len(completed_steps)
+            }
+    except Exception as e:
+        return {"result": "fail", "error": str(e)}
+
+# 10. 获取指定步骤的结果数据
+@router.post('/get_step_result')
+def get_step_result(req: GetStepResultRequest):
+    try:
+        with cc.compo.runtime.connect_crm(req.simulation_address, ISimulation) as simulation:
+            result = simulation.get_step_result(req.step)
+            if result is not None:
+                return {
+                    "result": "success",
+                    "data": result
+                }
+            else:
+                return {
+                    "result": "not_ready",
+                    "message": f"Step {req.step} is not ready or already retrieved"
+                }
+    except Exception as e:
+        return {"result": "fail", "error": str(e)}
+
+# 11. 检查步骤是否就绪
+@router.post('/check_step_ready')
+def check_step_ready(req: CheckStepReadyRequest):
+    try:
+        with cc.compo.runtime.connect_crm(req.simulation_address, ISimulation) as simulation:
+            is_ready = simulation.check_step_ready(req.step)
+            return {
+                "result": "success",
+                "step": req.step,
+                "ready": is_ready
+            }
+    except Exception as e:
+        return {"result": "fail", "error": str(e)}
+
+# 12. 获取模拟状态
+@router.post('/get_simulation_status')
+def get_simulation_status(req: GetSimulationStatusRequest):
+    try:
+        with cc.compo.runtime.connect_crm(req.simulation_address, ISimulation) as simulation:
+            status = simulation.get_simulation_status()
+            return {
+                "result": "success",
+                "status": status
+            }
+    except Exception as e:
+        return {"result": "fail", "error": str(e)}
+
+# 13. 添加人类干预行为
+@router.post('/add_human_action')
+def add_human_action(req: AddHumanActionRequest):
+    try:
+        from icrms.isimulation import HumanAction
+        
+        # 将字典转换为HumanAction对象
+        action = HumanAction.model_validate(req.action)
+        
+        with cc.compo.runtime.connect_crm(req.simulation_address, ISimulation) as simulation:
+            result = simulation.add_human_action(req.step, action)
+            return {
+                "result": "success" if result.get("success", False) else "fail",
+                "message": result.get("message", "Unknown error")
+            }
+    except Exception as e:
+        return {"result": "fail", "error": str(e)}

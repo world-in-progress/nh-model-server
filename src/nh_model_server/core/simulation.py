@@ -1,9 +1,10 @@
 import os
 import json
 import threading
-import multiprocessing
+from icrms.isimulation import ISimulation
 from src.nh_model_server.core.config import settings
-from src.nh_model_server.core.monitor import ResultMonitor
+from src.nh_model_server.core.bootstrapping_treeger import BT
+
 
 class SimulationProcessManager:
     def __init__(self):
@@ -94,13 +95,20 @@ class SimulationProcessManager:
         print(f"已构建进程组配置，包含 {len(process_configs)} 个进程配置")
         return group_id
 
-    def start_simulation(self, solution_name, simulation_name, simulation_address):
+    def start_simulation(self, solution_name, simulation_name):
         key = self._get_key(solution_name, simulation_name)
         with self.lock:
             # 检查是否已在运行
             if key in self.processes:
                 procs = self.processes[key]
-                if all(proc.is_alive() for proc in procs.values()):
+                # 检查模拟线程是否存在且存活
+                simulation_thread = procs.get('simulation_thread')
+                if simulation_thread and simulation_thread.is_alive():
+                    return False  # 该任务已在运行
+                
+                # 检查其他进程是否存在且存活
+                other_procs = {k: v for k, v in procs.items() if k != 'simulation_thread'}
+                if other_procs and all(hasattr(proc, 'is_alive') and proc.is_alive() for proc in other_procs.values()):
                     return False  # 该任务已在运行
             
             if key not in self.process_group_info:
@@ -113,133 +121,105 @@ class SimulationProcessManager:
             os.makedirs(resource_path, exist_ok=True)
             print("资源路径创建成功！")
             
-            # 创建跨进程信号
-            manager = multiprocessing.Manager()
-            stop_event = manager.Event()
-            pause_event = manager.Event()
-            resume_event = manager.Event()
-            update_config_event = manager.Event()
+            params = {
+                "resource_path": resource_path,
+                "solution_name": solution_name,
+                "simulation_name": simulation_name,
+                "process_group_config": config_info,
+            }
+            node_key = f'root.simulations.{simulation_name}'
+            BT.instance.mount_node("simulation", node_key, params)
+            BT.instance.activate_node(node_key)
             
-            # 创建monitor对象
-            monitor = ResultMonitor(
-                resource_path, 
-                simulation_address,
-                solution_name, 
-                simulation_name,
-                config_info,
-                stop_event=stop_event,
-                pause_event=pause_event,
-                resume_event=resume_event,
-                update_config_event=update_config_event
-            )
-            
-            # 创建并启动monitor进程
-            monitor_proc = multiprocessing.Process(target=monitor.run)
-            monitor_proc.start()
-            
-            # 保存monitor对象和进程
-            monitor_info = {}
-            monitor_info["monitor_obj"] = monitor
-            monitor_info["monitor_proc"] = monitor_proc
-            monitor_info["manager"] = manager
-            monitor_info["stop_event"] = stop_event  # 保存停止信号
-            monitor_info["pause_event"] = pause_event  # 保存暂停信号
-            monitor_info["resume_event"] = resume_event  # 保存继续信号
-            monitor_info["update_config_event"] = update_config_event  # 保存配置更新信号
-            self.monitors[key] = monitor_info
-            
-            # 只记录monitor进程
-            self.processes[key] = {"monitor": monitor_proc}
-            return True
+            try:
+                with BT.instance.connect(node_key, ISimulation) as simulation:
+                    success = simulation.run()
+                    print(f"模拟 {simulation_name} 启动状态: {success}")
+                    if success:
+                        print(f"模拟 {simulation_name} 启动成功")
+                        # 保存节点信息到processes字典中，以便状态查询和停止操作
+                        if key not in self.processes:
+                            self.processes[key] = {}
+                        self.processes[key]['node_key'] = node_key
+                        self.processes[key]['running'] = True
+                        return True
+                    else:
+                        print(f"模拟 {simulation_name} 启动失败")
+                        return False
+            except Exception as e:
+                print(f"模拟执行过程中出现错误: {e}")
+                return False
         
     def stop_simulation(self, solution_name, simulation_name):
         key = self._get_key(solution_name, simulation_name)
         with self.lock:
-            # 通过Event信号停止monitor进程
-            if key in self.monitors:
-                monitor_info = self.monitors[key]
-                monitor_proc = monitor_info["monitor_proc"]
-                stop_event = monitor_info["stop_event"]
-                
-                print(f"发送停止信号给monitor: {key}")
-                stop_event.set()  # 设置停止信号
-                
-                # 等待进程退出
-                if monitor_proc and monitor_proc.is_alive():
-                    monitor_proc.join(timeout=10)  # 等待最多10秒
-                    if monitor_proc.is_alive():
-                        print(f"Monitor进程未能在10秒内退出，强制终止...")
-                        monitor_proc.terminate()
-                        monitor_proc.join(timeout=5)
-                        if monitor_proc.is_alive():
-                            print(f"强制杀死Monitor进程")
-                            monitor_proc.kill()
-                            monitor_proc.join()
-                
-                # 清理进程记录
-                if key in self.processes:
-                    del self.processes[key]
-                
-                # 重置monitor进程
-                monitor_info["monitor_proc"] = None
-                monitor_info["manager"] = None
-                monitor_info["stop_event"] = None
-                
-            return True
+            try:
+                if key in self.processes and 'node_key' in self.processes[key]:
+                    node_key = self.processes[key]['node_key']
+                    with BT.instance.connect(node_key, ISimulation) as simulation:
+                        print(f"正在停止模拟: {simulation_name}")
+                        success = simulation.stop()
+                        if success:
+                            # 更新状态
+                            self.processes[key]['running'] = False
+                            print(f"模拟 {simulation_name} 停止成功")
+                            return True
+                        else:
+                            print(f"模拟 {simulation_name} 停止失败")
+                            return False
+                else:
+                    print(f"模拟 {simulation_name} 未找到或未运行")
+                    return False
+            except Exception as e:
+                print(f"停止模拟时出现错误: {e}")
+                return False
         
     def pause_simulation(self, solution_name, simulation_name):
         key = self._get_key(solution_name, simulation_name)
         with self.lock:
-            # 通过Event信号暂停monitor中的子进程
-            if key in self.monitors:
-                monitor_info = self.monitors[key]
-                pause_event = monitor_info.get("pause_event")
-                
-                if pause_event:
-                    print(f"发送暂停信号给monitor: {key}")
-                    pause_event.set()  # 设置暂停信号
-                    return True
+            try:
+                if key in self.processes and 'node_key' in self.processes[key]:
+                    node_key = self.processes[key]['node_key']
+                    with BT.instance.connect(node_key, ISimulation) as simulation:
+                        print(f"正在暂停模拟: {simulation_name}")
+                        success = simulation.pause()
+                        if success:
+                            # 更新状态
+                            self.processes[key]['paused'] = True
+                            print(f"模拟 {simulation_name} 暂停成功")
+                            return True
+                        else:
+                            print(f"模拟 {simulation_name} 暂停失败")
+                            return False
                 else:
-                    print(f"Monitor {key} 没有暂停事件信号")
+                    print(f"模拟 {simulation_name} 未找到或未运行")
                     return False
-            else:
-                print(f"Monitor {key} 不存在")
+            except Exception as e:
+                print(f"暂停模拟时出现错误: {e}")
                 return False
 
     def resume_simulation(self, solution_name, simulation_name, simulation_address=None, updated_config=None):
         key = self._get_key(solution_name, simulation_name)
         with self.lock:
-            # 通过Event信号恢复monitor中的子进程
-            if key in self.monitors:
-                monitor_info = self.monitors[key]
-                resume_event = monitor_info.get("resume_event")
-                update_config_event = monitor_info.get("update_config_event")
-                
-                if resume_event:
-                    # 如果有配置更新，先更新配置
-                    if updated_config:
-                        print(f"更新进程组配置: {key}")
-                        # 更新本地配置
-                        if key in self.process_group_info:
-                            self.process_group_info[key].update(updated_config)
-                        
-                        # 更新monitor中的配置
-                        monitor_obj = monitor_info.get("monitor_obj")
-                        if monitor_obj and hasattr(monitor_obj, 'update_config'):
-                            monitor_obj.update_config(updated_config.get("process_group_config"))
-                        
-                        # 设置配置更新信号
-                        if update_config_event:
-                            update_config_event.set()
-                    
-                    print(f"发送继续信号给monitor: {key}")
-                    resume_event.set()  # 设置继续信号
-                    return True
+            try:
+                if key in self.processes and 'node_key' in self.processes[key]:
+                    node_key = self.processes[key]['node_key']
+                    with BT.instance.connect(node_key, ISimulation) as simulation:
+                        print(f"正在恢复模拟: {simulation_name}")
+                        success = simulation.resume()
+                        if success:
+                            # 更新状态
+                            self.processes[key]['paused'] = False
+                            print(f"模拟 {simulation_name} 恢复成功")
+                            return True
+                        else:
+                            print(f"模拟 {simulation_name} 恢复失败")
+                            return False
                 else:
-                    print(f"Monitor {key} 没有继续事件信号")
+                    print(f"模拟 {simulation_name} 未找到或未运行")
                     return False
-            else:
-                print(f"Monitor {key} 不存在")
+            except Exception as e:
+                print(f"恢复模拟时出现错误: {e}")
                 return False
 
     def update_process_config_paths(self, solution_name, simulation_name, new_env_paths):
@@ -300,16 +280,46 @@ class SimulationProcessManager:
             return False
     
     def get_simulation_status(self, solution_name, simulation_name):
-        """获取仿真状态"""
+        """获取模拟状态"""
         key = self._get_key(solution_name, simulation_name)
         
         status = {
             "running": False,
             "paused": False,
             "monitor_alive": False,
+            "simulation_thread_alive": False,
             "child_processes": {}
         }
         
+        # 检查模拟状态
+        if key in self.processes:
+            proc_info = self.processes[key]
+            
+            # 从进程信息中获取运行状态
+            if proc_info.get('running', False):
+                status["running"] = True
+                
+                # 尝试连接到模拟实例获取更详细的状态
+                if 'node_key' in proc_info:
+                    try:
+                        node_key = proc_info['node_key']
+                        with BT.instance.connect(node_key, ISimulation) as simulation:
+                            # 使用新的状态查询方法
+                            sim_status = simulation.get_status()
+                            status.update({
+                                "running": sim_status.get("running", False),
+                                "paused": sim_status.get("paused", False),
+                                "simulation_thread_alive": sim_status.get("monitor_thread_alive", False),
+                                "monitor_alive": sim_status.get("monitor_thread_alive", False),
+                                "current_step": sim_status.get("current_step", 0),
+                                "child_processes_count": sim_status.get("child_processes_count", 0)
+                            })
+                    except Exception as e:
+                        print(f"获取模拟详细状态时出错: {e}")
+                        # 如果无法获取详细状态，至少标记为运行中
+                        status["running"] = proc_info.get('running', False)
+        
+        # 检查monitor状态（保持兼容性）
         if key in self.monitors:
             monitor_info = self.monitors[key]
             monitor_proc = monitor_info.get("monitor_proc")

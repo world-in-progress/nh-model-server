@@ -1,0 +1,6 @@
+{
+    "server_pid": 18984,
+    "bind_address": "memory://root.simulations.simulation0722_2",
+    "temp_dir": "temp\\root.simulations.simulation0722_2",
+    "status": "running"
+}

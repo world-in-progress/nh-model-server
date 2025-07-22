@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
+from .core.bootstrapping_treeger import BT
 
 from .api import api_router
 from .core.config import settings
@@ -9,6 +10,9 @@ from .core.config import settings
 async def lifespan(app: FastAPI):
     
     print("Starting up...")
+    BT()
+    BT.instance.mount_node('root', 'root')
+    BT.instance.mount_node('simulations', 'root.simulations')
     
     yield
     
