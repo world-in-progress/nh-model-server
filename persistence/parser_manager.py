@@ -206,3 +206,36 @@ class ParserManager:
         
         print("数据刷新完成")
         return model_input
+    
+    def reload_and_apply_actions(self, solution_path: str) -> Dict[str, Any]:
+        """
+        只重新加载最新的actions并应用到现有的解析数据上（不重新解析基础文件）
+        
+        Args:
+            solution_path: solution路径
+            
+        Returns:
+            应用最新actions后的模型输入数据
+        """
+        try:
+            if not self.parsed_data:
+                print("警告: 没有解析后的数据可供应用actions")
+                return {}
+            
+            print("开始重新加载最新actions...")
+            
+            # 1. 重新加载最新的actions
+            self.load_actions(solution_path)
+            
+            # 2. 应用actions到现有数据
+            self.apply_actions_to_data()
+            
+            # 3. 获取模型输入数据
+            model_input = self.get_model_input_data()
+            
+            print("最新actions加载并应用完成")
+            return model_input
+            
+        except Exception as e:
+            print(f"重新加载和应用actions时出错: {e}")
+            return {}

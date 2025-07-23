@@ -14,6 +14,7 @@ from src.nh_model_server.schemas.model import (
     GetCompletedStepsRequest, GetStepResultRequest, 
     CheckStepReadyRequest, GetSimulationStatusRequest, AddHumanActionRequest
 )
+from src.nh_model_server.core.bootstrapping_treeger import BT
 
 router = APIRouter(prefix='/model', tags=['model'])
 
@@ -152,7 +153,8 @@ def resume_simulation(req: ResumeSimulationRequest):
 @router.post('/get_completed_steps')
 def get_completed_steps(req: GetCompletedStepsRequest):
     try:
-        with cc.compo.runtime.connect_crm(req.simulation_address, ISimulation) as simulation:
+        node_key = f'root.simulations.{req.simulation_name}'
+        with BT.instance.connect(node_key, ISimulation) as simulation:
             completed_steps = simulation.get_completed_steps()
             return {
                 "result": "success", 
@@ -166,7 +168,8 @@ def get_completed_steps(req: GetCompletedStepsRequest):
 @router.post('/get_step_result')
 def get_step_result(req: GetStepResultRequest):
     try:
-        with cc.compo.runtime.connect_crm(req.simulation_address, ISimulation) as simulation:
+        node_key = f'root.simulations.{req.simulation_name}'
+        with BT.instance.connect(node_key, ISimulation) as simulation:
             result = simulation.get_step_result(req.step)
             if result is not None:
                 return {
@@ -185,7 +188,8 @@ def get_step_result(req: GetStepResultRequest):
 @router.post('/check_step_ready')
 def check_step_ready(req: CheckStepReadyRequest):
     try:
-        with cc.compo.runtime.connect_crm(req.simulation_address, ISimulation) as simulation:
+        node_key = f'root.simulations.{req.simulation_name}'
+        with BT.instance.connect(node_key, ISimulation) as simulation:
             is_ready = simulation.check_step_ready(req.step)
             return {
                 "result": "success",
@@ -199,7 +203,8 @@ def check_step_ready(req: CheckStepReadyRequest):
 @router.post('/get_simulation_status')
 def get_simulation_status(req: GetSimulationStatusRequest):
     try:
-        with cc.compo.runtime.connect_crm(req.simulation_address, ISimulation) as simulation:
+        node_key = f'root.simulations.{req.simulation_name}'
+        with BT.instance.connect(node_key, ISimulation) as simulation:
             status = simulation.get_simulation_status()
             return {
                 "result": "success",
@@ -217,7 +222,8 @@ def add_human_action(req: AddHumanActionRequest):
         # 将字典转换为HumanAction对象
         action = HumanAction.model_validate(req.action)
         
-        with cc.compo.runtime.connect_crm(req.simulation_address, ISimulation) as simulation:
+        node_key = f'root.simulations.{req.simulation_name}'
+        with BT.instance.connect(node_key, ISimulation) as simulation:
             result = simulation.add_human_action(req.step, action)
             return {
                 "result": "success" if result.get("success", False) else "fail",

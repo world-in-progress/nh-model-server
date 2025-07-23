@@ -70,7 +70,7 @@ class Simulation(ISimulation):
             print(f"初始化解析器管理器失败: {e}")
             self.parser_manager = None
 
-    def refresh_and_parse_data(self):
+    def parse_and_refresh_data(self):
         """刷新并解析数据，应用最新actions"""
         try:
             if not self.parser_manager:
@@ -99,15 +99,19 @@ class Simulation(ISimulation):
     def _apply_new_actions_to_model_data(self):
         """将最新的actions应用到保存的model_data上"""
         try:
-            if not self.parser_manager or self.model_data is None:
-                print("警告: 解析器管理器未初始化或model_data为空")
+            if not self.parser_manager:
+                print("警告: 解析器管理器未初始化")
+                return None
+                
+            if self.model_data is None:
+                print("警告: model_data为空")
                 return None
                 
             # 构建solution路径
             solution_path = os.path.dirname(self.resource_path)
             
             # 只重新加载和应用actions，而不重新解析基础文件
-            updated_model_data = self.parser_manager.apply_actions_to_data(self.model_data, solution_path)
+            updated_model_data = self.parser_manager.reload_and_apply_actions(solution_path)
             
             print("最新actions已应用到保存的model_data")
             return updated_model_data
@@ -333,7 +337,7 @@ class Simulation(ISimulation):
                 # 如果不是从暂停状态恢复，则读取并保存model_data
                 if not self.paused:
                     print("首次启动，读取并应用初始actions...")
-                    self.model_data = self.refresh_and_parse_data()
+                    self.model_data = self.parse_and_refresh_data()
                     if self.model_data is None:
                         print("警告: 初始数据解析失败")
                 
