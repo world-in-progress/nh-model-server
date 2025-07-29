@@ -1,17 +1,12 @@
 from pydantic import BaseModel
 from enum import Enum
 from typing import Any
-from icrms.isimulation import HumanAction
 
 class SolutionCheckRequest(BaseModel):
     solution: dict
 
-class CloneEnvRequest(BaseModel):
-    solution_name: str
-    solution_address: str
-
-class CloneActionRequest(BaseModel):
-    solution_name: str
+class ClonePackageRequest(BaseModel):
+    solution_node_key: str
     solution_address: str
 
 class BuildProcessGroupRequest(BaseModel):

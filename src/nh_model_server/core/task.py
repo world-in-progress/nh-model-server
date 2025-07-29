@@ -10,7 +10,7 @@ class TaskStatus(str, Enum):
     FAILED = 'failed'
 
 class TaskInfo(BaseModel):
-    solution_name: str
+    solution_node_key: str
 
 class Task(BaseModel):
     status: TaskStatus

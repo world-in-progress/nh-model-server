@@ -1,5 +1,6 @@
 import os
-import json
+import zipfile
+import io
 import c_two as cc
 from icrms.isolution import ISolution
 from icrms.isimulation import ISimulation
@@ -8,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from src.nh_model_server.core.task import task_manager, TaskStatus
 from src.nh_model_server.core.simulation import simulation_process_manager
 from src.nh_model_server.schemas.model import (
-    CloneActionRequest, SolutionCheckRequest, CloneEnvRequest, 
+    SolutionCheckRequest, ClonePackageRequest,
     BuildProcessGroupRequest, StartSimulationRequest, StopSimulationRequest, 
     PauseSimulationRequest, ResumeSimulationRequest,
     GetCompletedStepsRequest, GetStepResultRequest, 
@@ -27,43 +28,56 @@ def validate_solution(req: SolutionCheckRequest):
     return {"valid": True, "message": "Solution is valid."}
 
 # 2. 环境克隆
-@router.post('/clone_env')
-def clone_env(req: CloneEnvRequest, background_tasks: BackgroundTasks):
-    task_id = task_manager.create_task(info={"solution_name": req.solution_name})
+@router.post('/clone_package')
+def clone_package(req: ClonePackageRequest, background_tasks: BackgroundTasks):
+    task_id = task_manager.create_task(info={"solution_node_key": req.solution_node_key})
     def do_clone(task_id):
         try:
             task_manager.update_task(task_id, status=TaskStatus.RUNNING, progress=0)
-            # Connect to remote ISolution and clone env
-            print(req.solution_address)
             with cc.compo.runtime.connect_crm(req.solution_address, ISolution) as solution:
-                env_data = solution.clone_env()
-            # Prepare resource directory
-            resource_dir = os.path.join(settings.RESOURCE_PATH, req.solution_name)
+                clone_result = solution.clone_package()
+            clone_package_data = clone_result.get('package_data')
+            
+            if not clone_result.get('status', False) or not clone_package_data:
+                task_manager.update_task(task_id, status=TaskStatus.FAILED, info={"error": "Clone package failed or no package data"})
+                return
+            
+            resource_dir = os.path.join(settings.SOLUTION_DIR, req.solution_node_key)
             os.makedirs(resource_dir, exist_ok=True)
-            total = len(env_data)
-            for idx, (key, value) in enumerate(env_data.items()):
-                file_name = value['file_name']
-                file_path = os.path.join(resource_dir, file_name)
-                content = value['content']
-                # 判断 content 类型
-                if isinstance(content, (bytes, bytearray)):
-                    mode = 'wb'
-                    open_kwargs = {}
-                else:
-                    mode = 'w'
-                    open_kwargs = {'encoding': 'utf-8'}
-                with open(file_path, mode, **open_kwargs) as f:
-                    if mode == 'w':
-                        # 如果是 list，转为字符串
-                        if isinstance(content, list):
-                            f.write(''.join(str(line) for line in content))
-                        else:
-                            f.write(str(content))
-                    else:
-                        f.write(content)
-                # Update progress
-                task_manager.update_task(task_id, progress=int((idx+1)/total*100))
-            task_manager.update_task(task_id, status=TaskStatus.SUCCESS, progress=100)
+            
+            # 如果 clone_package_data 是二进制数据（压缩包）
+            if isinstance(clone_package_data, (bytes, bytearray)):
+                # 使用 zipfile 解压
+                with zipfile.ZipFile(io.BytesIO(clone_package_data), 'r') as zip_ref:
+                    # 获取压缩包中的文件列表
+                    file_list = zip_ref.namelist()
+                    total_files = len(file_list)
+                    
+                    if total_files == 0:
+                        task_manager.update_task(task_id, status=TaskStatus.FAILED, info={"error": "Empty zip package"})
+                        return
+                    
+                    # 解压所有文件并更新进度
+                    for idx, file_name in enumerate(file_list):
+                        # 确保安全的文件路径，防止路径遍历攻击
+                        safe_path = os.path.normpath(file_name)
+                        if safe_path.startswith('..') or os.path.isabs(safe_path):
+                            continue  # 跳过不安全的路径
+                        
+                        # 提取文件到目标目录
+                        zip_ref.extract(file_name, resource_dir)
+                        
+                        # 更新进度
+                        progress = int((idx + 1) / total_files * 100)
+                        task_manager.update_task(task_id, progress=progress)
+                    
+                    task_manager.update_task(task_id, status=TaskStatus.SUCCESS, progress=100)
+            else:
+                # 如果不是二进制数据，保持原有逻辑作为后备
+                task_manager.update_task(task_id, status=TaskStatus.FAILED, info={"error": "Package data is not in expected binary format"})
+                
+        except zipfile.BadZipFile:
+            task_manager.update_task(task_id, status=TaskStatus.FAILED, info={"error": "Invalid zip file format"})
         except Exception as e:
             task_manager.update_task(task_id, status=TaskStatus.FAILED, info={"error": str(e)})
     background_tasks.add_task(do_clone, task_id)
@@ -77,35 +91,7 @@ def clone_progress(task_id: str):
         raise HTTPException(404, detail="Task not found")
     return progress
 
-# 获取所有任务
-@router.get('/list_tasks')
-def list_tasks():
-    return task_manager.list_tasks()
-
-# 3. 获取action
-@router.post('/clone_actions')
-def clone_actions(req: CloneActionRequest):
-    try:
-        with cc.compo.runtime.connect_crm(req.solution_address, ISolution) as solution:
-            actions = solution.get_human_actions()
-            if not actions:
-                return {"status": "success", "message": "No actions found"}
-            action_dir = os.path.join(settings.RESOURCE_PATH, req.solution_name, 'actions')
-            os.makedirs(action_dir, exist_ok=True)
-            
-            for action in actions:
-                action_id = action.get('action_id')
-                if not action_id:
-                    continue
-                action_file = os.path.join(action_dir, f"{action_id}.json")
-                with open(action_file, "w", encoding="utf-8") as f:
-                    json.dump(action, f, ensure_ascii=False, indent=4)
-                    
-        return {"status": "success", "message": f"Saved {len(actions)} actions"}
-    except Exception as e:
-        return {"status": "fail", "message": str(e)}
-
-# 4. 构建进程组
+# 3. 构建进程组
 @router.post('/build_process_group')
 def build_process_group(req: BuildProcessGroupRequest):
     try:
@@ -116,7 +102,7 @@ def build_process_group(req: BuildProcessGroupRequest):
     except Exception as e:
         return {"result": "fail", "error": str(e)}
 
-# 5. 启动模拟
+# 4. 启动模拟
 @router.post('/start_simulation')
 def start_simulation(req: StartSimulationRequest):
     ok = simulation_process_manager.start_simulation(
@@ -124,7 +110,7 @@ def start_simulation(req: StartSimulationRequest):
     )
     return {"result": "started" if ok else "already running"}
 
-# 6. 结束模拟
+# 5. 结束模拟
 @router.post('/stop_simulation')
 def stop_simulation(req: StopSimulationRequest):
     print("Stopping simulation:", req.simulation_name)
@@ -133,7 +119,7 @@ def stop_simulation(req: StopSimulationRequest):
     )
     return {"result": "stopped" if ok else "not running"}
 
-# 7. 暂停模拟
+# 6. 暂停模拟
 @router.post('/pause_simulation')
 def pause_simulation(req: PauseSimulationRequest):
     ok = simulation_process_manager.pause_simulation(
@@ -141,7 +127,7 @@ def pause_simulation(req: PauseSimulationRequest):
     )
     return {"result": "paused" if ok else "not running"}
 
-# 8. 恢复模拟
+# 7. 恢复模拟
 @router.post('/resume_simulation')
 def resume_simulation(req: ResumeSimulationRequest):
     ok = simulation_process_manager.resume_simulation(
@@ -149,7 +135,7 @@ def resume_simulation(req: ResumeSimulationRequest):
     )
     return {"result": "resumed" if ok else "not running"}
 
-# 9. 获取已完成步骤列表
+# 8. 获取已完成步骤列表
 @router.post('/get_completed_steps')
 def get_completed_steps(req: GetCompletedStepsRequest):
     try:
@@ -164,7 +150,7 @@ def get_completed_steps(req: GetCompletedStepsRequest):
     except Exception as e:
         return {"result": "fail", "error": str(e)}
 
-# 10. 获取指定步骤的结果数据
+# 9. 获取指定步骤的结果数据
 @router.post('/get_step_result')
 def get_step_result(req: GetStepResultRequest):
     try:
@@ -184,7 +170,7 @@ def get_step_result(req: GetStepResultRequest):
     except Exception as e:
         return {"result": "fail", "error": str(e)}
 
-# 11. 检查步骤是否就绪
+# 10. 检查步骤是否就绪
 @router.post('/check_step_ready')
 def check_step_ready(req: CheckStepReadyRequest):
     try:
@@ -199,7 +185,7 @@ def check_step_ready(req: CheckStepReadyRequest):
     except Exception as e:
         return {"result": "fail", "error": str(e)}
 
-# 12. 获取模拟状态
+# 11. 获取模拟状态
 @router.post('/get_simulation_status')
 def get_simulation_status(req: GetSimulationStatusRequest):
     try:
@@ -213,7 +199,7 @@ def get_simulation_status(req: GetSimulationStatusRequest):
     except Exception as e:
         return {"result": "fail", "error": str(e)}
 
-# 13. 添加人类干预行为
+# 12. 添加人类干预行为
 @router.post('/add_human_action')
 def add_human_action(req: AddHumanActionRequest):
     try:
