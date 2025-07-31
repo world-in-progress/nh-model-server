@@ -1,0 +1,17 @@
+meta:
+  configuration:
+    scene_path: resource/scene.db
+  crm_entries:
+    - name: Treeger
+      icrm: ITreeger
+      crm_launcher: scripts/treeger.crm.py
+    - name: Simulation
+      icrm: ISimulation
+      crm_launcher: scripts/simulation.crm.py
+  scenario:
+    name: root
+    children:
+      - name: simulations
+        children:
+          - name: simulation
+            crm: Simulation

@@ -2,28 +2,7 @@
   {
     "group_type": "flood_pipe",
     "description": "洪水-管道联合模拟",
-    "parser_config": {
-      "parser_module": "persistence.parsers.flood_pipe",
-      "data_parsers": {
-        "ne": "get_ne",
-        "ns": "get_ns",
-        "rainfall": "get_rainfall",
-        "tide": "get_tide",
-        "gate": "get_gate"
-      },
-      "action_appliers": {
-        "gate_control": "apply_gate_action",
-        "rainfall_modification": "apply_rainfall_action",
-        "tide_adjustment": "apply_tide_action"
-      },
-      "model_data_mapping": {
-        "ne_data": "ne",
-        "ns_data": "ns",
-        "rainfall_data": "rainfall",
-        "tide_data": "tide",
-        "gate_data": "gate"
-      }
-    },
+    "helper": "persistence.helpers.flood_pipe",
     "shared": [
       {
         "name": "1d_data",
@@ -57,11 +36,27 @@
             "type": "dict"
           },
           {
-            "name": "model_data",
-            "type": "dict"
+            "name": "ne",
+            "type": "str"
           },
           {
-            "name": "inp_path",
+            "name": "ns",
+            "type": "str"
+          },
+          {
+            "name": "rainfall",
+            "type": "str"
+          },
+          {
+            "name": "tide",
+            "type": "str"
+          },
+          {
+            "name": "gate",
+            "type": "str"
+          },
+          {
+            "name": "inp",
             "type": "str"
           },
           {
@@ -88,7 +83,7 @@
             "type": "dict"
           },
           {
-            "name": "inp_path",
+            "name": "inp",
             "type": "str"
           },
           {
