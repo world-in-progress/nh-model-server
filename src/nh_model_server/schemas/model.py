@@ -24,8 +24,8 @@ class StopSimulationRequest(BaseModel):
     simulation_node_key: str
 
 class PauseSimulationRequest(BaseModel):
-    solution_name: str
-    simulation_name: str
+    solution_node_key: str
+    simulation_node_key: str
 
 class ResumeSimulationRequest(BaseModel):
     solution_name: str
@@ -58,3 +58,8 @@ class AddHumanActionRequest(BaseModel):
     simulation_address: str
     step: int
     action: dict[str, Any]  # HumanAction的字典形式
+
+class GetStepResultResponse(BaseModel):
+    success: bool
+    message: str
+    result: dict[str, Any]

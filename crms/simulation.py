@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import base64
 import threading
 import importlib
 import c_two as cc
@@ -62,10 +63,27 @@ class Simulation(ISimulation):
                 if not self.paused:
                     self.model_data = self._parse_data()
 
+                    # path1 = self.solution_path / 'test' / 'model_input_data.txt'
+                    # ne_data = self.model_data.get('ne', {})
+                    # ze_list = ne_data.ze_list
+                    # under_suf_list = ne_data.under_suf_list
+                    # with open(path1, 'w', encoding='utf-8') as f:
+                    #     for item in zip(ze_list, under_suf_list):
+                    #         f.write(f"{item[0]},{item[1]}\n")
+
                     # 如果有初始人类行为数据，则解析并更新模型输入数据
                     initial_human_action_path = self.solution_path / 'actions' / 'human_actions'
                     if initial_human_action_path.exists():
+                        print(f"找到初始人类行为数据: {initial_human_action_path}")
                         self.model_data = self._update_data(str(initial_human_action_path))
+
+                    # path2 = self.solution_path / 'test' / 'model_input_data_updated.txt'
+                    # ne_data_updated = self.model_data.get('ne', {})
+                    # ze_list_updated = ne_data_updated.ze_list
+                    # under_suf_list_updated = ne_data_updated.under_suf_list
+                    # with open(path2, 'w', encoding='utf-8') as f:
+                    #     for item in zip(ze_list_updated, under_suf_list_updated):
+                    #         f.write(f"{item[0]},{item[1]}\n")
 
                     if self.model_data is None:
                         print("警告: 初始数据解析失败")
@@ -112,7 +130,7 @@ class Simulation(ISimulation):
             print(f"模拟 {self.solution_node_key}_{self.simulation_node_key} 已停止")
             return True
 
-    def _parse_data(self):
+    def _parse_data(self) -> dict[str, Any] | None:
         try:
             """解析数据文件，返回模型输入数据"""
             model_input_data = {}
@@ -142,7 +160,7 @@ class Simulation(ISimulation):
             print(f"解析数据时出错: {e}")
             return None
 
-    def _update_data(self, action_path):
+    def _update_data(self, action_path) -> dict[str, Any] | None:
         """更新模型输入数据 - 遍历指定文件夹中的所有JSON文件"""
         try:
             action_path = Path(action_path)
@@ -209,7 +227,7 @@ class Simulation(ISimulation):
             self._cleanup_child_processes()
             # 清理manager
             self._cleanup_manager()
-            print(f"Monitor线程 {self.solution_name}_{self.simulation_name} 已退出")
+            print(f"Monitor线程 {self.solution_node_key}_{self.simulation_node_key} 已退出")
 
     def _start_child_processes_with_data(self, model_input_data=None):
         """根据配置创建并启动子进程，使用指定的模型数据"""
@@ -295,11 +313,11 @@ class Simulation(ISimulation):
     
     def _check_result_files(self):
         """检测当前step文件夹和all.done文件"""
-        if not os.path.exists(self.resource_path):
+        if not os.path.exists(self.result_path):
             return
         
         # 检查all.done文件，如果存在则清理所有进程并退出
-        all_done_file = os.path.join(self.resource_path, 'all.done')
+        all_done_file = os.path.join(self.result_path, 'all.done')
         if os.path.exists(all_done_file):
             print("检测到all.done文件，开始清理进程组...")
             self._cleanup_child_processes()
@@ -308,7 +326,7 @@ class Simulation(ISimulation):
         
         # 检查当前step的.done文件
         step_name = "step" + str(self.current_step)
-        step_dir = os.path.join(self.resource_path, step_name)
+        step_dir = os.path.join(self.result_path, step_name)
         if not os.path.isdir(step_dir):
             return
         done_file = os.path.join(step_dir, f'{step_name}.done')
@@ -373,7 +391,7 @@ class Simulation(ISimulation):
         """读取某个step文件夹下的所有结果文件"""
         try:
             step_name = "step" + str(step)
-            step_dir = os.path.join(self.resource_path, step_name)
+            step_dir = os.path.join(self.result_path, step_name)
             
             # 检查step文件夹是否存在
             if not os.path.isdir(step_dir):
@@ -398,11 +416,52 @@ class Simulation(ISimulation):
             result_data = {}
             for file_type, file_path in result_path.items():
                 try:
+                    # 首先尝试以文本方式读取
                     with open(file_path, 'r', encoding='utf-8') as f:
-                        result_data[file_type] = [line.strip() for line in f if line.strip()]
-                except Exception:
+                        content = f.read().strip()
+                        # 如果是JSON文件，尝试解析
+                        if file_path.endswith('.json'):
+                            try:
+                                result_data[file_type] = json.loads(content)
+                            except json.JSONDecodeError:
+                                # JSON解析失败，当作普通文本处理
+                                result_data[file_type] = {
+                                    'type': 'text',
+                                    'content': [line.strip() for line in content.split('\n') if line.strip()]
+                                }
+                        else:
+                            # 普通文本文件，按行分割
+                            result_data[file_type] = {
+                                'type': 'text',
+                                'content': [line.strip() for line in content.split('\n') if line.strip()]
+                            }
+                except UnicodeDecodeError:
+                    # 如果文本读取失败，说明是二进制文件，使用base64编码
+                    print(f"文件 {file_path} 为二进制文件，使用base64编码")
                     with open(file_path, 'rb') as f:
-                        result_data[file_type] = f.read()
+                        binary_content = f.read()
+                        result_data[file_type] = {
+                            'type': 'binary',
+                            'content': base64.b64encode(binary_content).decode('utf-8'),
+                            'size': len(binary_content)
+                        }
+                except Exception as e:
+                    print(f"读取文件 {file_path} 时出错: {e}")
+                    # 最后的兜底方案，尝试二进制读取
+                    try:
+                        with open(file_path, 'rb') as f:
+                            binary_content = f.read()
+                            result_data[file_type] = {
+                                'type': 'binary',
+                                'content': base64.b64encode(binary_content).decode('utf-8'),
+                                'size': len(binary_content)
+                            }
+                    except Exception as binary_error:
+                        print(f"二进制读取文件 {file_path} 也失败: {binary_error}")
+                        result_data[file_type] = {
+                            'type': 'error',
+                            'error': str(binary_error)
+                        }
                         
             print(f"已读取step {step} 的结果数据")
             return result_data
