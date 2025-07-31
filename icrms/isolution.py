@@ -64,9 +64,9 @@ class ISolution:
         """
         ...
 
-    def get_env(self) -> dict:
+    def get_model_env(self) -> dict:
         """
-        获取环境变量字典
-        :return: 环境变量字典
+        获取模型环境字典
+        :return: 模型环境字典
         """
         ...

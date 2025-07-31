@@ -2,6 +2,7 @@ import os
 import json
 import threading
 from icrms.isimulation import ISimulation
+from icrms.itreeger import ReuseAction, CRMDuration
 from src.nh_model_server.core.config import settings
 from src.nh_model_server.core.bootstrapping_treeger import BT
 
@@ -30,19 +31,16 @@ class SimulationProcessManager:
                 return group
         return None
 
-    def build_process_group(self, solution_name, simulation_name, group_type, env):
+    def build_process_group(self, solution_node_key, simulation_node_key, group_type, model_env):
         config = self.get_process_group_config(group_type)
         if not config:
             raise ValueError(f"Unknown process group type: {group_type}")
-        resource_path = settings.RESOURCE_PATH + "/" + solution_name + "/" + simulation_name
-
-        # 遍历env，将所有路径转为文件名
-        for key, value in env.items():
-            if value:
-                env[key] = os.path.basename(value)
+        simulation_resource_path = settings.SIMULATION_DIR + "/" + simulation_node_key
+        os.makedirs(simulation_resource_path, exist_ok=True)
+        print("资源路径创建成功！")
 
         # 只保存进程配置，不创建真实的进程对象
-        process_configs = []
+        process_config_list = []
         # proc_cfg是每一个进程的配置
         for proc_cfg in config["processes"]:
             proc_name = proc_cfg["name"]
@@ -54,22 +52,13 @@ class SimulationProcessManager:
                 if pname == "shared":
                     proc_params[pname] = "shared"  # 标记，在monitor中会替换为真实的shared对象
                 elif pname == "resource_path":
-                    proc_params[pname] = resource_path
+                    proc_params[pname] = simulation_resource_path
                 elif pname == "step":
                     proc_params[pname] = 0
                 elif pname == "flag":
                     proc_params[pname] = 1
-                elif pname == "model_data":
-                    proc_params[pname] = None  # 标记，在monitor中会传入解析后的数据
-                elif pname in env:
-                    # 保留原有的文件路径参数处理逻辑，以支持旧的模型接口
-                    origin_path = env[pname]
-                    file_name = os.path.basename(origin_path)
-                    proc_params[pname] = file_name
-                else:
-                    # 对于不在env中的参数，检查是否是已知的数据类型参数
-                    if pname not in ["shared", "resource_path", "step", "flag", "model_data"]:
-                        print(f"警告: 未找到参数 {pname} 的值")
+                elif pname in model_env:
+                    proc_params[pname] = model_env[pname]
             
             # 保存进程配置
             process_config = {
@@ -78,25 +67,24 @@ class SimulationProcessManager:
                 "entrypoint": proc_cfg["entrypoint"],
                 "params": proc_params
             }
-            process_configs.append(process_config)
+            process_config_list.append(process_config)
         
-        group_id = self._get_key(solution_name, simulation_name)
+        group_id = self._get_key(solution_node_key, simulation_node_key)
         
         self.process_group_info[group_id] = {
             "group_type": group_type,
-            "process_configs": process_configs,
-            "resource_path": resource_path,
+            "process_configs": process_config_list,
             "shared_config": config.get("shared", []),
             "monitor_config": config.get("monitor_config", {}),
-            "parser_config": config.get("parser_config", {}),
-            "env": env
+            "helper": config.get("helper", {}),
+            "model_env": model_env
         }
         
-        print(f"已构建进程组配置，包含 {len(process_configs)} 个进程配置")
+        print(f"已构建进程组配置，包含 {len(process_config_list)} 个进程配置")
         return group_id
 
-    def start_simulation(self, solution_name, simulation_name):
-        key = self._get_key(solution_name, simulation_name)
+    def start_simulation(self, solution_node_key, simulation_node_key):
+        key = self._get_key(solution_node_key, simulation_node_key)
         with self.lock:
             # 检查是否已在运行
             if key in self.processes:
@@ -116,59 +104,51 @@ class SimulationProcessManager:
             
             config_info = self.process_group_info[key]
             
-            # 创建资源路径
-            resource_path = config_info["resource_path"]
-            os.makedirs(resource_path, exist_ok=True)
-            print("资源路径创建成功！")
-            
             params = {
-                "resource_path": resource_path,
-                "solution_name": solution_name,
-                "simulation_name": simulation_name,
+                "solution_node_key": solution_node_key,
+                "simulation_node_key": simulation_node_key,
                 "process_group_config": config_info,
             }
-            node_key = f'root.simulations.{simulation_name}'
-            BT.instance.mount_node("simulation", node_key, params)
-            BT.instance.activate_node(node_key)
-            
+            BT.instance.mount_node("simulation", simulation_node_key, params)
+
             try:
-                with BT.instance.connect(node_key, ISimulation) as simulation:
+                with BT.instance.connect(simulation_node_key, ISimulation, duration=CRMDuration.Forever, reuse=ReuseAction.REPLACE) as simulation:
                     success = simulation.run()
-                    print(f"模拟 {simulation_name} 启动状态: {success}")
+                    print(f"模拟 {simulation_node_key} 启动状态: {success}")
                     if success:
-                        print(f"模拟 {simulation_name} 启动成功")
+                        print(f"模拟 {simulation_node_key} 启动成功")
                         # 保存节点信息到processes字典中，以便状态查询和停止操作
                         if key not in self.processes:
                             self.processes[key] = {}
-                        self.processes[key]['node_key'] = node_key
+                        self.processes[key]['node_key'] = simulation_node_key
                         self.processes[key]['running'] = True
                         return True
                     else:
-                        print(f"模拟 {simulation_name} 启动失败")
+                        print(f"模拟 {simulation_node_key} 启动失败")
                         return False
             except Exception as e:
                 print(f"模拟执行过程中出现错误: {e}")
                 return False
         
-    def stop_simulation(self, solution_name, simulation_name):
-        key = self._get_key(solution_name, simulation_name)
+    def stop_simulation(self, solution_node_key, simulation_node_key):
+        key = self._get_key(solution_node_key, simulation_node_key)
         with self.lock:
             try:
                 if key in self.processes and 'node_key' in self.processes[key]:
                     node_key = self.processes[key]['node_key']
                     with BT.instance.connect(node_key, ISimulation) as simulation:
-                        print(f"正在停止模拟: {simulation_name}")
+                        print(f"正在停止模拟: {simulation_node_key}")
                         success = simulation.stop()
                         if success:
                             # 更新状态
                             self.processes[key]['running'] = False
-                            print(f"模拟 {simulation_name} 停止成功")
+                            print(f"模拟 {simulation_node_key} 停止成功")
                             return True
                         else:
-                            print(f"模拟 {simulation_name} 停止失败")
+                            print(f"模拟 {simulation_node_key} 停止失败")
                             return False
                 else:
-                    print(f"模拟 {simulation_name} 未找到或未运行")
+                    print(f"模拟 {simulation_node_key} 未找到或未运行")
                     return False
             except Exception as e:
                 print(f"停止模拟时出现错误: {e}")

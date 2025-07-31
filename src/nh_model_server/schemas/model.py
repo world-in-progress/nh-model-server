@@ -10,18 +10,18 @@ class ClonePackageRequest(BaseModel):
     solution_address: str
 
 class BuildProcessGroupRequest(BaseModel):
-    solution_name: str
+    solution_node_key: str
     simulation_name: str
     group_type: str
     solution_address: str
 
 class StartSimulationRequest(BaseModel):
-    solution_name: str
+    solution_node_key: str
     simulation_name: str
 
 class StopSimulationRequest(BaseModel):
-    solution_name: str
-    simulation_name: str
+    solution_node_key: str
+    simulation_node_key: str
 
 class PauseSimulationRequest(BaseModel):
     solution_name: str
@@ -38,9 +38,7 @@ class GetCompletedStepsRequest(BaseModel):
     simulation_address: str
 
 class GetStepResultRequest(BaseModel):
-    solution_name: str
-    simulation_name: str
-    simulation_address: str
+    simulation_node_key: str
     step: int
 
 class CheckStepReadyRequest(BaseModel):

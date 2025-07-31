@@ -4,6 +4,7 @@ import io
 import c_two as cc
 from icrms.isolution import ISolution
 from icrms.isimulation import ISimulation
+from icrms.itreeger import ReuseAction, CRMDuration
 from src.nh_model_server.core.config import settings
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from src.nh_model_server.core.task import task_manager, TaskStatus
@@ -95,9 +96,10 @@ def clone_progress(task_id: str):
 @router.post('/build_process_group')
 def build_process_group(req: BuildProcessGroupRequest):
     try:
+        simulation_node_key = f'root.simulations.{req.simulation_name}'
         with cc.compo.runtime.connect_crm(req.solution_address, ISolution) as solution:
-            env = solution.get_env()
-        group_id = simulation_process_manager.build_process_group(req.solution_name, req.simulation_name, req.group_type, env)
+            model_env = solution.get_model_env()
+        group_id = simulation_process_manager.build_process_group(req.solution_node_key, simulation_node_key, req.group_type, model_env)
         return {"result": "success", "group_id": group_id}
     except Exception as e:
         return {"result": "fail", "error": str(e)}
@@ -105,17 +107,18 @@ def build_process_group(req: BuildProcessGroupRequest):
 # 4. 启动模拟
 @router.post('/start_simulation')
 def start_simulation(req: StartSimulationRequest):
+    simulation_node_key = f'root.simulations.{req.simulation_name}'
     ok = simulation_process_manager.start_simulation(
-        req.solution_name, req.simulation_name
+        req.solution_node_key, simulation_node_key
     )
     return {"result": "started" if ok else "already running"}
 
 # 5. 结束模拟
 @router.post('/stop_simulation')
 def stop_simulation(req: StopSimulationRequest):
-    print("Stopping simulation:", req.simulation_name)
+    print("Stopping simulation:", req.simulation_node_key)
     ok = simulation_process_manager.stop_simulation(
-        req.solution_name, req.simulation_name
+        req.solution_node_key, req.simulation_node_key
     )
     return {"result": "stopped" if ok else "not running"}
 
@@ -154,8 +157,7 @@ def get_completed_steps(req: GetCompletedStepsRequest):
 @router.post('/get_step_result')
 def get_step_result(req: GetStepResultRequest):
     try:
-        node_key = f'root.simulations.{req.simulation_name}'
-        with BT.instance.connect(node_key, ISimulation) as simulation:
+        with BT.instance.connect(req.simulation_node_key, ISimulation, duration=CRMDuration.Forever, reuse=ReuseAction.REPLACE) as simulation:
             result = simulation.get_step_result(req.step)
             if result is not None:
                 return {
