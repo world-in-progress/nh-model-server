@@ -49,7 +49,7 @@ class Gate:
     grid_id_list: list[list[int]]
 
 def get_ne(ne_path) -> NeData:
-        grid_id_list = [0]
+        grid_id_list = []
         nsl1_list = [0]
         nsl2_list = [0]
         nsl3_list = [0]
@@ -231,17 +231,30 @@ def is_point_in_polygon(x: float, y: float, polygon_coords: list) -> bool:
 
 def is_point_intersects_with_feature(x: float, y: float, feature_json: dict) -> bool:
     """
-    判断点是否与GeoJSON feature相交
+    判断点是否与GeoJSON feature或FeatureCollection相交
     
     Args:
         x: 点的x坐标
         y: 点的y坐标
-        feature_json: GeoJSON格式的地理要素
+        feature_json: GeoJSON格式的地理要素（Feature或FeatureCollection）
         
     Returns:
         bool: True表示相交，False表示不相交
     """
-    if not feature_json or 'geometry' not in feature_json:
+    if not feature_json:
+        return False
+    
+    # 检查是否是FeatureCollection
+    if feature_json.get('type') == 'FeatureCollection':
+        features = feature_json.get('features', [])
+        # 只要与任何一个feature相交就返回True
+        for feature in features:
+            if is_point_intersects_with_feature(x, y, feature):
+                return True
+        return False
+    
+    # 处理单个Feature
+    if 'geometry' not in feature_json:
         return False
     
     geometry = feature_json['geometry']
@@ -319,13 +332,20 @@ def is_point_intersects_with_feature(x: float, y: float, feature_json: dict) -> 
     return False
 
 def apply_add_fence_action(fence_params: FenceParams, model_data: dict) -> dict:
+
+    print("----------------------1234567890----------------------")
     elevation_delta = fence_params.elevation_delta
     landuse_type = fence_params.landuse_type
     feature_json = fence_params.feature
-    
+
+    print(f"elevation_delta: {elevation_delta}")
+    print(f"landuse_type: {landuse_type}")
+    print(f"feature_json: {feature_json}")
+
     ne_data: NeData = model_data.get('ne', {})
     ns_data: NsData = model_data.get('ns', {})
     
+    print("开始遍历ne_data")
     for index in range(len(ne_data.xe_list)):
         x = ne_data.xe_list[index]
         y = ne_data.ye_list[index]
@@ -338,6 +358,7 @@ def apply_add_fence_action(fence_params: FenceParams, model_data: dict) -> dict:
                 ne_data.under_suf_list[index] = landuse_type
             logger.info(f"网格中心点 ({x}, {y}) 与feature相交，应用了地形变化: {elevation_delta} 和土地利用类型: {landuse_type}")
 
+    print("开始遍历ns_data")
     for index in range(len(ns_data.x_side_list)):
         x = ns_data.x_side_list[index]
         y = ns_data.y_side_list[index]

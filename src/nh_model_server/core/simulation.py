@@ -154,25 +154,25 @@ class SimulationProcessManager:
                 print(f"停止模拟时出现错误: {e}")
                 return False
         
-    def pause_simulation(self, solution_name, simulation_name):
-        key = self._get_key(solution_name, simulation_name)
+    def pause_simulation(self, solution_node_key, simulation_node_key, step):
+        key = self._get_key(solution_node_key, simulation_node_key)
         with self.lock:
             try:
                 if key in self.processes and 'node_key' in self.processes[key]:
                     node_key = self.processes[key]['node_key']
-                    with BT.instance.connect(node_key, ISimulation) as simulation:
-                        print(f"正在暂停模拟: {simulation_name}")
+                    with BT.instance.connect(node_key, ISimulation, duration=CRMDuration.Forever, reuse=ReuseAction.KEEP) as simulation:
+                        print(f"正在暂停模拟: {simulation_node_key}")
                         success = simulation.pause()
                         if success:
                             # 更新状态
                             self.processes[key]['paused'] = True
-                            print(f"模拟 {simulation_name} 暂停成功")
+                            print(f"模拟 {simulation_node_key} 暂停成功")
                             return True
                         else:
-                            print(f"模拟 {simulation_name} 暂停失败")
+                            print(f"模拟 {simulation_node_key} 暂停失败")
                             return False
                 else:
-                    print(f"模拟 {simulation_name} 未找到或未运行")
+                    print(f"模拟 {simulation_node_key} 未找到或未运行")
                     return False
             except Exception as e:
                 print(f"暂停模拟时出现错误: {e}")

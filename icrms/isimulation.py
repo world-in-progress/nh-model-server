@@ -55,12 +55,12 @@ class ISimulation:
         """
         ...
 
-    # def pause(self) -> bool:
-    #     """
-    #     暂停模拟
-    #     :return: 暂停是否成功
-    #     """
-    #     ...
+    def pause(self) -> bool:
+        """
+        暂停模拟
+        :return: 暂停是否成功
+        """
+        ...
 
     # def resume(self) -> bool:
     #     """

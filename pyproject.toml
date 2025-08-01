@@ -7,11 +7,29 @@ requires-python = ">=3.12"
 dependencies = [
     "c-two>=0.1.20",
     "fastapi>=0.115.13",
-    "numpy>=2.3.1",
+    "gdal>=3.11.1",
+    "numpy==2.2",
+    "pillow>=11.3.0",
     "pyswmm>=2.0.1",
     "pyyaml>=6.0.2",
+    "scipy==1.13.1",
     "taichi>=1.7.3",
+    "tqdm>=4.67.1",
 ]
 
 [tool.uv.sources]
 c-two = { git = "https://github.com/world-in-progress/c-two.git", branch = "main" }
+gdal = [
+  { index = "gdal-wheels", marker = "sys_platform == 'linux'" },
+  { index = "geospatial_wheels", marker = "sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "geospatial_wheels"
+url = "https://nathanjmcdougall.github.io/geospatial-wheels-index/"
+explicit = true
+
+[[tool.uv.index]]
+name = "gdal-wheels"
+url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/simple"
+explicit = true
