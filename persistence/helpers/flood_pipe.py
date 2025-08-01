@@ -49,7 +49,7 @@ class Gate:
     grid_id_list: list[list[int]]
 
 def get_ne(ne_path) -> NeData:
-        grid_id_list = [0]
+        grid_id_list = []
         nsl1_list = [0]
         nsl2_list = [0]
         nsl3_list = [0]

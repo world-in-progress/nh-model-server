@@ -26,6 +26,7 @@ class StopSimulationRequest(BaseModel):
 class PauseSimulationRequest(BaseModel):
     solution_node_key: str
     simulation_node_key: str
+    step: int
 
 class ResumeSimulationRequest(BaseModel):
     solution_name: str

@@ -130,7 +130,7 @@ def stop_simulation(req: StopSimulationRequest):
 @router.post('/pause_simulation', response_model=BaseResponse)
 def pause_simulation(req: PauseSimulationRequest):
     ok = simulation_process_manager.pause_simulation(
-        req.solution_node_key, req.simulation_node_key
+        req.solution_node_key, req.simulation_node_key, req.step
     )
     return BaseResponse(success=ok, message="Simulation paused" if ok else "Failed to pause simulation")
 

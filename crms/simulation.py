@@ -12,6 +12,7 @@ from datetime import datetime
 from src.nh_model_server.core.config import settings
 from icrms.isimulation import ISimulation, FenceParams, GateParams, TransferWaterParams, ActionType
 from persistence.helpers.flood_pipe import get_ne, get_ns, get_rainfall, get_gate, get_tide, apply_add_fence_action, apply_add_gate_action, apply_transfer_water_action
+from persistence.huv_generater.AHuvGeneration import huv_generater, TINContext
 
 @cc.iicrm
 class Simulation(ISimulation):
@@ -27,7 +28,8 @@ class Simulation(ISimulation):
 
         self.running = False
         self.paused = False  # 暂停状态标志
-        self.current_step = 1  # 当前监控的step
+        self.current_simulation_step = 1  # 当前监控的模拟step
+        self.current_render_step = 1  # 当前监控的渲染step
         self.process_group_config = process_group_config  # 进程组配置
         self.child_processes = {}  # 子进程字典
         self.manager = None  # multiprocessing.Manager实例
@@ -40,6 +42,11 @@ class Simulation(ISimulation):
         
         # 结果轮询相关属性
         self.completed_steps = set()  # 已完成但未被拉取的步骤集合
+        
+        # 可视化生成相关属性
+        self.rendering_step = 0
+        self.visualization_processes = {}  # 可视化生成进程字典，key为step，value为process
+        self.tin_context = TINContext()
 
         self.file_types = process_group_config.get("monitor_config", {}).get("file_types", [])
         self.file_suffix = process_group_config.get("monitor_config", {}).get("file_suffix", {})
@@ -120,8 +127,12 @@ class Simulation(ISimulation):
                 else:
                     print("监控线程已成功结束")
             
-            # 清理子进程（如果线程还没有清理的话）
+            # 清理子进程和manager
             self._cleanup_child_processes()
+            self._cleanup_manager()
+            
+            # 清理可视化生成进程
+            self._cleanup_visualization_processes()
             
             # 清空model_data
             self.model_data = None
@@ -129,6 +140,45 @@ class Simulation(ISimulation):
             
             print(f"模拟 {self.solution_node_key}_{self.simulation_node_key} 已停止")
             return True
+        
+    def pause(self) -> bool:
+        """暂停模拟（停止监控线程和子进程，但保持model_data）"""
+        with self.thread_lock:
+            if not self.running:
+                print("模拟未运行，无法暂停")
+                return False
+            
+            if self.paused:
+                print("模拟已处于暂停状态")
+                return True
+            
+            print(f"开始暂停模拟 {self.solution_node_key}_{self.simulation_node_key}...")
+            
+            # 停止运行标志，这会导致监控线程退出
+            self.running = False
+            
+            # 等待监控线程结束
+            if self.monitor_thread and self.monitor_thread.is_alive():
+                print("等待监控线程结束...")
+                self.monitor_thread.join(timeout=10)
+                
+                if self.monitor_thread.is_alive():
+                    print("警告：监控线程未能在指定时间内结束")
+                else:
+                    print("监控线程已成功结束")
+            
+            # 清理子进程和manager
+            self._cleanup_child_processes()
+            self._cleanup_manager()
+            
+            # 清理可视化生成进程
+            self._cleanup_visualization_processes()
+            
+            # 设置暂停状态，但保持model_data
+            self.paused = True
+            print(f"模拟 {self.solution_node_key}_{self.simulation_node_key} 已暂停，model_data已保留")
+            return True
+
 
     def _parse_data(self) -> dict[str, Any] | None:
         try:
@@ -324,15 +374,33 @@ class Simulation(ISimulation):
             self.running = False
             return
         
-        # 检查当前step的.done文件
-        step_name = "step" + str(self.current_step)
-        step_dir = os.path.join(self.result_path, step_name)
-        if not os.path.isdir(step_dir):
+        # 监测模拟过程
+        simulation_step_name = "step" + str(self.current_simulation_step)
+        simulation_step_dir = os.path.join(self.result_path, simulation_step_name)
+        if not os.path.isdir(simulation_step_dir):
             return
-        done_file = os.path.join(step_dir, f'{step_name}.done')
-        if os.path.exists(done_file):
-            print(f"step {self.current_step} 已完成，等待前端轮询获取结果")
-            self.current_step += 1
+        simulation_done_file = os.path.join(simulation_step_dir, f'{simulation_step_name}.done')
+        if os.path.exists(simulation_done_file):
+            print(f"step {self.current_simulation_step} 的模拟已完成，等待渲染")
+            self.current_simulation_step += 1
+
+        # 监测渲染过程
+        # 如果当前渲染步骤小于当前模拟步骤，则检查是否需要启动渲染进程
+        if self.current_render_step < self.current_simulation_step:
+            render_step_name = "step" + str(self.current_render_step)
+            render_step_dir = os.path.join(self.result_path, render_step_name)
+            if not os.path.isdir(render_step_dir):
+                return
+            render_done_file = os.path.join(render_step_dir, 'render', 'render.done')
+            # 如果render.done文件不存在，且正在渲染的步骤小于当前渲染步骤，才会开启渲染进程
+            if not os.path.exists(render_done_file) and self.rendering_step < self.current_render_step:
+                # 启动可视化资源生成
+                self._start_visualization_generation(self.current_render_step, render_step_dir)
+                self.rendering_step = self.current_render_step
+            elif os.path.exists(render_done_file):
+                print(f"step {self.current_render_step} 的渲染已完成，等待前端轮询获取结果")
+                self.current_render_step += 1
+
 
     def _cleanup_child_processes(self):
         """清理所有子进程"""
@@ -368,6 +436,81 @@ class Simulation(ISimulation):
                 print("Manager清理完成")
         except Exception as e:
             print(f"清理Manager时出错: {e}")
+    
+    def _start_visualization_generation(self, step: int, step_dir: str):
+        """启动可视化资源生成进程"""
+        try:
+            # 检查是否已经有该step的可视化生成进程在运行
+            if step in self.visualization_processes:
+                vis_process = self.visualization_processes[step]
+                if vis_process.is_alive():
+                    print(f"step {step} 的可视化生成进程已在运行中")
+                    return
+                else:
+                    # 清理已完成的进程和对应的TIN上下文
+                    del self.visualization_processes[step]
+                    self.tin_context = None
+            
+            # ne_data = self.model_data.get('ne', {})
+            # ne_dict = {
+            #     'xe_list': ne_data.xe_list if hasattr(ne_data, 'xe_list') else [],
+            #     'ye_list': ne_data.ye_list if hasattr(ne_data, 'ye_list') else []
+            # }
+            ne_dict = self.solution_path / 'env' / self.model_env.get('ne', '')
+
+            result_path = os.path.join(step_dir, "result.dat")
+
+            # 准备输出路径
+            output_path = os.path.join(step_dir, 'render', '')  # 确保以/结尾
+            os.makedirs(output_path, exist_ok=True)
+            
+            # 创建可视化生成进程，直接调用huv_generater
+            vis_process = multiprocessing.Process(
+                target=huv_generater,
+                kwargs={
+                    'ne_list': ne_dict,
+                    'result_path': result_path,
+                    'GLOBAL_TIN_CONTEXT': self.tin_context,
+                    'output_path': output_path
+                },
+                name=f"visualization_{self.solution_node_key}_{self.simulation_node_key}_step{step}"
+            )
+            
+            # 启动进程并记录
+            vis_process.start()
+            self.visualization_processes[step] = vis_process
+            print(f"已启动step {step} 的可视化生成进程 (PID: {vis_process.pid})")
+            
+        except Exception as e:
+            print(f"启动step {step} 可视化生成进程时出错: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _cleanup_visualization_processes(self):
+        """清理所有可视化生成进程"""
+        try:
+            if not self.visualization_processes:
+                return
+            
+            print("开始清理可视化生成进程...")
+            for step, process in list(self.visualization_processes.items()):
+                if process.is_alive():
+                    print(f"正在终止step {step} 可视化生成进程 (PID: {process.pid})...")
+                    process.terminate()
+                    process.join(timeout=30)  # 最多等待30秒
+                    if process.is_alive():
+                        print(f"强制杀死step {step} 可视化生成进程...")
+                        process.kill()
+                        process.join()
+                else:
+                    print(f"step {step} 可视化生成进程已经停止")
+            
+            self.visualization_processes.clear()
+            self.tin_context = None  # 清理TIN上下文
+            print("可视化生成进程清理完成")
+            
+        except Exception as e:
+            print(f"清理可视化生成进程时出错: {e}")
 
     def get_step_result(self, step: int) -> dict[str, Any] | None:
         """获取指定步骤的结果数据，获取后将该步骤标记为已拉取"""
@@ -469,4 +612,83 @@ class Simulation(ISimulation):
         except Exception as e:
             print(f"读取step {step} 结果时出错: {e}")
             return None
+    
+    def get_visualization_status(self, step: int) -> dict[str, Any]:
+        """获取指定步骤的可视化生成状态"""
+        try:
+            step_name = "step" + str(step)
+            step_dir = os.path.join(self.result_path, step_name)
+            
+            # 检查step文件夹是否存在
+            if not os.path.isdir(step_dir):
+                return {
+                    'step': step,
+                    'status': 'step_not_found',
+                    'message': f"step文件夹不存在: {step_dir}"
+                }
+            
+            # 检查step是否完成
+            done_file = os.path.join(step_dir, f'{step_name}.done')
+            if not os.path.exists(done_file):
+                return {
+                    'step': step,
+                    'status': 'step_not_completed',
+                    'message': f"step {step} 尚未完成"
+                }
+            
+            # 检查可视化是否正在生成
+            if step in self.visualization_processes:
+                process = self.visualization_processes[step]
+                if process.is_alive():
+                    return {
+                        'step': step,
+                        'status': 'generating',
+                        'message': f"step {step} 可视化正在生成中 (PID: {process.pid})"
+                    }
+            
+            # 检查可视化是否已完成
+            visualization_done_file = os.path.join(step_dir, f'step{step}.visualization.done')
+            if os.path.exists(visualization_done_file):
+                # 检查可视化文件是否存在
+                visualization_files = {
+                    'huv_stats': os.path.join(step_dir, 'huv_stats.txt'),
+                    'depth_image': os.path.join(step_dir, 'depth.png'),
+                    'u_image': os.path.join(step_dir, 'u.png'),
+                    'v_image': os.path.join(step_dir, 'v.png')
+                }
+                
+                existing_files = {}
+                missing_files = []
+                
+                for file_type, file_path in visualization_files.items():
+                    if os.path.exists(file_path):
+                        existing_files[file_type] = {
+                            'path': file_path,
+                            'size': os.path.getsize(file_path),
+                            'modified': datetime.fromtimestamp(os.path.getmtime(file_path)).isoformat()
+                        }
+                    else:
+                        missing_files.append(file_type)
+                
+                return {
+                    'step': step,
+                    'status': 'completed',
+                    'message': f"step {step} 可视化已完成",
+                    'files': existing_files,
+                    'missing_files': missing_files,
+                    'completion_time': datetime.fromtimestamp(os.path.getmtime(visualization_done_file)).isoformat()
+                }
+            else:
+                return {
+                    'step': step,
+                    'status': 'not_started',
+                    'message': f"step {step} 可视化尚未开始生成"
+                }
+                
+        except Exception as e:
+            return {
+                'step': step,
+                'status': 'error',
+                'message': f"检查可视化状态时出错: {e}"
+            }
     
