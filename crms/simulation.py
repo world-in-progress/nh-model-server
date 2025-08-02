@@ -10,9 +10,9 @@ from typing import Any
 from pathlib import Path
 from datetime import datetime
 from src.nh_model_server.core.config import settings
+from persistence.huv_generater.AHuvGeneration import huv_generater, TINContext
 from icrms.isimulation import ISimulation, FenceParams, GateParams, TransferWaterParams, ActionType
 from persistence.helpers.flood_pipe import get_ne, get_ns, get_rainfall, get_gate, get_tide, apply_add_fence_action, apply_add_gate_action, apply_transfer_water_action
-from persistence.huv_generater.AHuvGeneration import huv_generater, TINContext
 
 @cc.iicrm
 class Simulation(ISimulation):
@@ -45,6 +45,7 @@ class Simulation(ISimulation):
         
         # 可视化生成相关属性
         self.rendering_step = 0
+        self.max_step = 0
         self.visualization_processes = {}  # 可视化生成进程字典，key为step，value为process
         self.tin_context = TINContext()
 
@@ -264,7 +265,7 @@ class Simulation(ISimulation):
             
             while self.running:
                 try:
-                    self._check_result_files()
+                    self._monitoring()
                     
                     if not self.running:  # 检查是否需要退出
                         break
@@ -277,6 +278,8 @@ class Simulation(ISimulation):
             self._cleanup_child_processes()
             # 清理manager
             self._cleanup_manager()
+            # 清理可视化生成进程
+            self._cleanup_visualization_processes()
             print(f"Monitor线程 {self.solution_node_key}_{self.simulation_node_key} 已退出")
 
     def _start_child_processes_with_data(self, model_input_data=None):
@@ -361,18 +364,17 @@ class Simulation(ISimulation):
                 raise ValueError(f"Unsupported shared type: {typ}")
         return self.shared
     
-    def _check_result_files(self):
+    def _monitoring(self):
         """检测当前step文件夹和all.done文件"""
         if not os.path.exists(self.result_path):
             return
         
-        # 检查all.done文件，如果存在则清理所有进程并退出
+        # 检查all.done文件，如果存在则清理模拟进程
         all_done_file = os.path.join(self.result_path, 'all.done')
         if os.path.exists(all_done_file):
             print("检测到all.done文件，开始清理进程组...")
             self._cleanup_child_processes()
-            self.running = False
-            return
+            self.max_step = self.current_simulation_step
         
         # 监测模拟过程
         simulation_step_name = "step" + str(self.current_simulation_step)
@@ -400,6 +402,14 @@ class Simulation(ISimulation):
             elif os.path.exists(render_done_file):
                 print(f"step {self.current_render_step} 的渲染已完成，等待前端轮询获取结果")
                 self.current_render_step += 1
+
+        # 如果当前渲染步骤等于最大步骤，则清理可视化生成进程并停止监控
+        if self.current_render_step == self.max_step:
+            print(f"所有步骤 {self.current_render_step} 的渲染已完成，等待前端轮询获取结果")
+            self._cleanup_visualization_processes()
+            self.running = False  # 停止监控线程
+            return
+
 
 
     def _cleanup_child_processes(self):
@@ -450,12 +460,7 @@ class Simulation(ISimulation):
                     # 清理已完成的进程和对应的TIN上下文
                     del self.visualization_processes[step]
                     self.tin_context = None
-            
-            # ne_data = self.model_data.get('ne', {})
-            # ne_dict = {
-            #     'xe_list': ne_data.xe_list if hasattr(ne_data, 'xe_list') else [],
-            #     'ye_list': ne_data.ye_list if hasattr(ne_data, 'ye_list') else []
-            # }
+
             ne_dict = self.solution_path / 'env' / self.model_env.get('ne', '')
 
             result_path = os.path.join(step_dir, "result.dat")
