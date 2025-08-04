@@ -28,7 +28,7 @@
     "processes": [
       {
         "name": "flood",
-        "script": "coupled_0710.Flood_new",
+        "script": "coupled_0801.Flood_new801",
         "entrypoint": "run_flood",
         "parameters": [
           {
@@ -70,12 +70,16 @@
           {
             "name": "flag",
             "type": "int"
+          },
+          {
+            "name": "watergroups",
+            "type": "list"
           }
         ]
       },
       {
         "name": "pipe",
-        "script": "coupled_0710.pipe_NH",
+        "script": "coupled_0801.pipe_NH801",
         "entrypoint": "run_pipe_simulation",
         "parameters": [
           {
@@ -99,14 +103,14 @@
     ],
     "monitor_config": {
       "file_types": [
-        "result",
-        "flood_nodes",
-        "hsf"
+        "huv",
+        "huv_stats",
+        "flood_nodes"
       ],
       "file_suffix": {
-        "result": ".dat",
-        "flood_nodes": ".txt",
-        "hsf": ".hsf"
+        "huv": ".png",
+        "huv_stats": ".txt",
+        "flood_nodes": ".txt"
       }
     }
   },

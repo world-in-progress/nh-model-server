@@ -23,7 +23,8 @@ class TransferWaterParams(BaseModel):
     q: float  # 通量
     
 class GateParams(BaseModel):
-    ud_stream: int
+    up_stream: int
+    down_stream: int
     gate_height: int
     feature: dict[str, Any]
 
@@ -88,7 +89,6 @@ class ISimulation:
     #     ...
 
     # # ------------------------------------------------------------
-    # # Result Polling Interface
     # def get_completed_steps(self) -> list[int]:
     #     """
     #     获取已完成但未被拉取的步骤列表
@@ -96,6 +96,7 @@ class ISimulation:
     #     """
     #     ...
 
+    # Result Polling Interface
     def get_step_result(self, step: int) -> dict[str, Any] | None:
         """
         获取指定步骤的结果数据，获取后将该步骤标记为已拉取

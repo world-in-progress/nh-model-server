@@ -10,7 +10,7 @@ from typing import Any
 from pathlib import Path
 from datetime import datetime
 from src.nh_model_server.core.config import settings
-from persistence.huv_generater.AHuvGeneration import huv_generater, TINContext
+from persistence.huv_generater.GHuvgenerator import huv_generator, solve_irregular_grid
 from icrms.isimulation import ISimulation, FenceParams, GateParams, TransferWaterParams, ActionType
 from persistence.helpers.flood_pipe import get_ne, get_ns, get_rainfall, get_gate, get_tide, apply_add_fence_action, apply_add_gate_action, apply_transfer_water_action
 
@@ -35,6 +35,7 @@ class Simulation(ISimulation):
         self.manager = None  # multiprocessing.Manager实例
         self.shared = None  # 共享对象字典
         self.model_data = None  # 保存模型数据，用于暂停恢复机制
+        self.watergroups = []  # 水体组数据，用于水体转移操作
         
         # 添加线程相关属性
         self.monitor_thread = None  # 监控线程
@@ -47,7 +48,6 @@ class Simulation(ISimulation):
         self.rendering_step = 0
         self.max_step = 0
         self.visualization_processes = {}  # 可视化生成进程字典，key为step，value为process
-        self.tin_context = TINContext()
 
         self.file_types = process_group_config.get("monitor_config", {}).get("file_types", [])
         self.file_suffix = process_group_config.get("monitor_config", {}).get("file_suffix", {})
@@ -57,6 +57,13 @@ class Simulation(ISimulation):
         self.path.mkdir(parents=True, exist_ok=True)
         self.human_action_path.mkdir(parents=True, exist_ok=True)
         self.result_path.mkdir(parents=True, exist_ok=True)
+
+        grid_result, header, bbox = solve_irregular_grid(
+            self.solution_path / 'env' / self.model_env.get('ne', ''),
+            self.solution_path / 'env' / self.model_env.get('ns', '')
+        )
+        self.grid_result = grid_result
+        self.bbox = bbox
 
     def run(self) -> bool:
         """启动监控线程"""
@@ -83,7 +90,7 @@ class Simulation(ISimulation):
                     initial_human_action_path = self.solution_path / 'actions' / 'human_actions'
                     if initial_human_action_path.exists():
                         print(f"找到初始人类行为数据: {initial_human_action_path}")
-                        self.model_data = self._update_data(str(initial_human_action_path))
+                        self._update_data(str(initial_human_action_path))
 
                     # path2 = self.solution_path / 'test' / 'model_input_data_updated.txt'
                     # ne_data_updated = self.model_data.get('ne', {})
@@ -211,7 +218,7 @@ class Simulation(ISimulation):
             print(f"解析数据时出错: {e}")
             return None
 
-    def _update_data(self, action_path) -> dict[str, Any] | None:
+    def _update_data(self, action_path):
         """更新模型输入数据 - 遍历指定文件夹中的所有JSON文件"""
         try:
             action_path = Path(action_path)
@@ -241,19 +248,16 @@ class Simulation(ISimulation):
                 elif action_type == ActionType.ADD_GATE:
                     self.model_data = apply_add_gate_action(GateParams(**params), self.model_data)
                 elif action_type == ActionType.TRANSFER_WATER:
-                    self.model_data = apply_transfer_water_action(TransferWaterParams(**params), self.model_data)
+                    self.watergroups = apply_transfer_water_action(TransferWaterParams(**params), self.watergroups)
                 else:
                     print(f"未知的action_type: {action_type}")
 
                 print(f"已应用动作: {action_type}，参数: {params}")
-
-            return self.model_data
                 
         except Exception as e:
             print(f"更新数据时出错: {e}")
             import traceback
             traceback.print_exc()
-            return None
 
     def _monitor_loop(self):
         """以进程方式运行监控循环（在线程中执行）"""
@@ -282,7 +286,7 @@ class Simulation(ISimulation):
             self._cleanup_visualization_processes()
             print(f"Monitor线程 {self.solution_node_key}_{self.simulation_node_key} 已退出")
 
-    def _start_child_processes_with_data(self, model_input_data=None):
+    def _start_child_processes_with_data(self, model_input_data=None, flag=1):
         """根据配置创建并启动子进程，使用指定的模型数据"""
         if not self.process_group_config:
             return
@@ -323,6 +327,12 @@ class Simulation(ISimulation):
                 
                 if "inp" in proc_params:
                     proc_params['inp'] = self.solution_path / 'env' / proc_params['inp']
+
+                if "flag" in proc_params:
+                    proc_params['flag'] = flag
+
+                if "watergroups" in proc_params:
+                    proc_params["watergroups"] = self.watergroups
 
                 # 动态导入模块和函数
                 if not os.path.isabs(script_path):
@@ -410,8 +420,6 @@ class Simulation(ISimulation):
             self.running = False  # 停止监控线程
             return
 
-
-
     def _cleanup_child_processes(self):
         """清理所有子进程"""
         if not self.child_processes:
@@ -459,24 +467,22 @@ class Simulation(ISimulation):
                 else:
                     # 清理已完成的进程和对应的TIN上下文
                     del self.visualization_processes[step]
-                    self.tin_context = None
 
-            ne_dict = self.solution_path / 'env' / self.model_env.get('ne', '')
 
-            result_path = os.path.join(step_dir, "result.dat")
+            result_file = os.path.join(step_dir, "result.dat")
 
             # 准备输出路径
             output_path = os.path.join(step_dir, 'render', '')  # 确保以/结尾
             os.makedirs(output_path, exist_ok=True)
             
-            # 创建可视化生成进程，直接调用huv_generater
+            # 创建可视化生成进程，直接调用huv_generator
             vis_process = multiprocessing.Process(
-                target=huv_generater,
+                target=huv_generator,
                 kwargs={
-                    'ne_list': ne_dict,
-                    'result_path': result_path,
-                    'GLOBAL_TIN_CONTEXT': self.tin_context,
-                    'output_path': output_path
+                    'result_file': result_file,
+                    'output_path': output_path,
+                    'grid_result': self.grid_result,
+                    'bbox': self.bbox
                 },
                 name=f"visualization_{self.solution_node_key}_{self.simulation_node_key}_step{step}"
             )
@@ -511,7 +517,6 @@ class Simulation(ISimulation):
                     print(f"step {step} 可视化生成进程已经停止")
             
             self.visualization_processes.clear()
-            self.tin_context = None  # 清理TIN上下文
             print("可视化生成进程清理完成")
             
         except Exception as e:
@@ -552,17 +557,41 @@ class Simulation(ISimulation):
                 print(f"step {step} 尚未完成")
                 return None
             
-            result_path = {}
-            for file_type in self.file_types:
-                suffix = self.file_suffix[file_type] if self.file_suffix and file_type in self.file_suffix else ''
-                file_path = os.path.join(step_dir, f"{file_type}{suffix}")
-                if not os.path.exists(file_path):
-                    print(f"缺少数据文件: {file_path}")
-                    return None
-                result_path[file_type] = file_path
-                
+            # 递归获取所有文件路径
+            def get_all_files(directory):
+                """递归获取目录下所有文件的路径"""
+                all_files = {}
+                for root, dirs, files in os.walk(directory):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        # 计算相对于step_dir的相对路径作为key
+                        relative_path = os.path.relpath(file_path, step_dir)
+                        all_files[relative_path] = file_path
+                return all_files
+            
+            # 获取所有文件路径
+            all_files = get_all_files(step_dir)
+            
+            # 根据file_suffix进行筛选
+            filtered_files = {}
+            
+            # 如果配置了file_types和file_suffix，则按配置筛选
+            if self.file_types and self.file_suffix:
+                for file_type in self.file_types:
+                    suffix = self.file_suffix[file_type] if file_type in self.file_suffix else ''
+                    expected_file = f"{file_type}{suffix}"
+                    
+                    # 在所有文件中查找匹配的文件
+                    for relative_path, full_path in all_files.items():
+                        if relative_path == expected_file or relative_path.endswith(f"/{expected_file}") or relative_path.endswith(f"\\{expected_file}"):
+                            filtered_files[file_type] = full_path
+                            break
+            else:
+                # 如果没有配置筛选规则，则读取所有文件
+                filtered_files = {relative_path: full_path for relative_path, full_path in all_files.items()}
+            
             result_data = {}
-            for file_type, file_path in result_path.items():
+            for file_key, file_path in filtered_files.items():
                 try:
                     # 首先尝试以文本方式读取
                     with open(file_path, 'r', encoding='utf-8') as f:
@@ -570,16 +599,16 @@ class Simulation(ISimulation):
                         # 如果是JSON文件，尝试解析
                         if file_path.endswith('.json'):
                             try:
-                                result_data[file_type] = json.loads(content)
+                                result_data[file_key] = json.loads(content)
                             except json.JSONDecodeError:
                                 # JSON解析失败，当作普通文本处理
-                                result_data[file_type] = {
+                                result_data[file_key] = {
                                     'type': 'text',
                                     'content': [line.strip() for line in content.split('\n') if line.strip()]
                                 }
                         else:
                             # 普通文本文件，按行分割
-                            result_data[file_type] = {
+                            result_data[file_key] = {
                                 'type': 'text',
                                 'content': [line.strip() for line in content.split('\n') if line.strip()]
                             }
@@ -588,7 +617,7 @@ class Simulation(ISimulation):
                     print(f"文件 {file_path} 为二进制文件，使用base64编码")
                     with open(file_path, 'rb') as f:
                         binary_content = f.read()
-                        result_data[file_type] = {
+                        result_data[file_key] = {
                             'type': 'binary',
                             'content': base64.b64encode(binary_content).decode('utf-8'),
                             'size': len(binary_content)
@@ -599,19 +628,19 @@ class Simulation(ISimulation):
                     try:
                         with open(file_path, 'rb') as f:
                             binary_content = f.read()
-                            result_data[file_type] = {
+                            result_data[file_key] = {
                                 'type': 'binary',
                                 'content': base64.b64encode(binary_content).decode('utf-8'),
                                 'size': len(binary_content)
                             }
                     except Exception as binary_error:
                         print(f"二进制读取文件 {file_path} 也失败: {binary_error}")
-                        result_data[file_type] = {
+                        result_data[file_key] = {
                             'type': 'error',
                             'error': str(binary_error)
                         }
                         
-            print(f"已读取step {step} 的结果数据")
+            print(f"已读取step {step} 的结果数据，共读取 {len(result_data)} 个文件")
             return result_data
             
         except Exception as e:
