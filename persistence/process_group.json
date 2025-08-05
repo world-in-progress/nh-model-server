@@ -104,12 +104,12 @@
     "monitor_config": {
       "file_types": [
         "huv",
-        "huv_stats",
+        "data",
         "flood_nodes"
       ],
       "file_suffix": {
         "huv": ".png",
-        "huv_stats": ".txt",
+        "data": ".json",
         "flood_nodes": ".txt"
       }
     }

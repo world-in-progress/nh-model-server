@@ -411,7 +411,6 @@ def create_tiled_datasets(merged_result, no_data_value=-9999,
 
     return dataset, pixel_size
 
-
 def downsample_dataset(dataset, pixel_size, target_resolution=20, no_data_value=-9999):
     """
     对GDAL数据集进行下采样，从原始分辨率下采样到指定分辨率
@@ -425,6 +424,13 @@ def downsample_dataset(dataset, pixel_size, target_resolution=20, no_data_value=
     
     返回:
         下采样后的GDAL数据集
+        #设定降采样参数
+        width = 2
+        height = 2
+
+        #将图像降采样
+        ds_gray1 = np.mean(gray.reshape(-1, height, gray.shape[1]), axis=1) 
+        ds_gray = np.mean(ds_gray1.reshape(-1, width, ds_gray1.shape[-1]), axis=1)
     """
     print(f"开始下采样，目标分辨率: {target_resolution}米...")
     
@@ -439,9 +445,7 @@ def downsample_dataset(dataset, pixel_size, target_resolution=20, no_data_value=
     original_pixel_size = pixel_size
     
     print(f"原始数据集: {original_width}x{original_height}, 像素大小: {original_pixel_size}米")
-    
-    # 计算采样窗口大小
-    if original_pixel_size<target_resolution:
+    if original_pixel_size < target_resolution:
         # 计算采样窗口大小
         sample_window_size = int(target_resolution / original_pixel_size)
     else:
@@ -449,9 +453,10 @@ def downsample_dataset(dataset, pixel_size, target_resolution=20, no_data_value=
     
     print(f"采样窗口大小: {sample_window_size}x{sample_window_size}")
     
-    # 计算新的数据集尺寸
-    new_width = original_width // sample_window_size
-    new_height = original_height // sample_window_size
+    # 计算新的数据集尺寸 - 基于扩展后的尺寸而不是原始尺寸
+    # 确保能完整覆盖原始数据，向上取整
+    new_width = (original_width + sample_window_size - 1) // sample_window_size
+    new_height = (original_height + sample_window_size - 1) // sample_window_size
     
     print(f"下采样后尺寸: {new_width}x{new_height}")
     
@@ -472,7 +477,7 @@ def downsample_dataset(dataset, pixel_size, target_resolution=20, no_data_value=
     downsampled_dataset.SetProjection(projection)
     
     def process_band_optimized(band_idx):
-        """优化的波段处理函数，使用向量化操作"""
+        """优化的波段处理函数，使用向量化操作，对除不尽的部分进行nodata填充"""
         # 获取原始波段
         original_band = dataset.GetRasterBand(band_idx)
         original_data = original_band.ReadAsArray().astype(np.float32)
@@ -482,14 +487,21 @@ def downsample_dataset(dataset, pixel_size, target_resolution=20, no_data_value=
         new_band.SetNoDataValue(float(no_data_value))  # 确保是 float 类型
         new_band.SetDescription(original_band.GetDescription())
         
-        # 裁剪数据到能整除窗口大小的尺寸
-        crop_height = (original_height // sample_window_size) * sample_window_size
-        crop_width = (original_width // sample_window_size) * sample_window_size
-        cropped_data = original_data[:crop_height, :crop_width]
+        # 计算需要扩展到的尺寸（能被窗口大小整除）
+        padded_height = new_height * sample_window_size
+        padded_width = new_width * sample_window_size
+        
+        # 创建扩展后的数组，用nodata值填充
+        padded_data = np.full((padded_height, padded_width), no_data_value, dtype=np.float32)
+        
+        # 将原始数据复制到扩展数组的左上角
+        padded_data[:original_height, :original_width] = original_data
+        
+        print(f"波段 {band_idx}: 原始尺寸 {original_height}x{original_width}, 扩展后尺寸 {padded_height}x{padded_width}")
         
         # 重塑数组以便于批量处理
         # 形状: (new_height, sample_window_size, new_width, sample_window_size)
-        reshaped = cropped_data.reshape(
+        reshaped = padded_data.reshape(
             new_height, sample_window_size,
             new_width, sample_window_size
         )
@@ -510,9 +522,16 @@ def downsample_dataset(dataset, pixel_size, target_resolution=20, no_data_value=
         window_data_masked = np.where(valid_mask, window_data, 0)
         window_sums = np.sum(window_data_masked, axis=2)
         
-        # 计算平均值，避免除零
+        # 计算平均值，需要至少 50% 有效像素才参与平均
         new_data = np.full((new_height, new_width), no_data_value, dtype=np.float32)
-        has_valid = valid_counts > 0
+        
+        # 需要至少 50% 有效像素才参与平均
+        min_valid_ratio = 0.5
+        window_size_total = sample_window_size * sample_window_size
+        threshold = min_valid_ratio * window_size_total  # 计算有效像素的阈值（50%）
+        has_valid = valid_counts >= threshold  # 只有有效像素数量达到阈值的窗口才参与计算
+        
+        # 对满足条件的窗口计算平均值
         new_data[has_valid] = window_sums[has_valid] / valid_counts[has_valid]
         
         # 写入新波段
