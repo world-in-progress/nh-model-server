@@ -59,6 +59,8 @@ class SimulationProcessManager:
                     proc_params[pname] = 1
                 elif pname in model_env:
                     proc_params[pname] = model_env[pname]
+                else:
+                    proc_params[pname] = None
             
             # 保存进程配置
             process_config = {

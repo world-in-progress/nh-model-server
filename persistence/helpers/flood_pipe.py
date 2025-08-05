@@ -48,57 +48,57 @@ class Gate:
     gate_height_list:list[int]
     grid_id_list: list[list[int]]
 
-def get_ne(ne_path) -> NeData:
-        grid_id_list = []
-        nsl1_list = [0]
-        nsl2_list = [0]
-        nsl3_list = [0]
-        nsl4_list = [0]
-        isl1_list = [[0,0,0,0,0,0,0,0,0,0]]
-        isl2_list = [[0,0,0,0,0,0,0,0,0,0]]
-        isl3_list = [[0,0,0,0,0,0,0,0,0,0]]
-        isl4_list = [[0,0,0,0,0,0,0,0,0,0]]
-        xe_list = [0.0]
-        ye_list = [0.0]
-        ze_list = [0.0]
-        under_suf_list = [0]
-        with open(ne_path, 'r', encoding='utf-8') as f:
-            for row_data in f:
-                row_data = row_data.strip().split(',')
-                # 创建NeData对象
-                grid_id_list.append(int(row_data[0]))
-                nsl1 = int(row_data[1])
-                nsl2 = int(row_data[2])
-                nsl3 = int(row_data[3])
-                nsl4 = int(row_data[4])
-                nsl1_list.append(nsl1)
-                nsl2_list.append(nsl2)
-                nsl3_list.append(nsl3)
-                nsl4_list.append(nsl4)
-                isl1 = [0 for _ in range(nsl1)]
-                isl2 = [0 for _ in range(nsl2)]
-                isl3 = [0 for _ in range(nsl3)]
-                isl4 = [0 for _ in range(nsl4)]
-                for i in range(nsl1): 
-                    isl1[i] = int(row_data[5+i]) 
-                for i in range(nsl2): 
-                    isl2[i] = int(row_data[5+nsl1+i])
-                for i in range(nsl3): 
-                    isl3[i] = int(row_data[5+nsl1+nsl2+i])
-                for i in range(nsl4): 
-                    isl4[i] = int(row_data[5+nsl1+nsl2+nsl3+i])
-                isl1_list.append(isl1)
-                isl2_list.append(isl2)
-                isl3_list.append(isl3)
-                isl4_list.append(isl4)
-                xe_list.append(float(row_data[-4]))
-                ye_list.append(float(row_data[-3]))
-                ze_list.append(float(row_data[-2]))
-                under_suf_list.append(int(float(row_data[-1])))       
-        ne_data = NeData(grid_id_list,nsl1_list,nsl2_list,nsl3_list,nsl4_list,isl1_list,isl2_list,isl3_list,isl4_list,xe_list,ye_list,ze_list,under_suf_list)
-        return ne_data
-    
-def get_ns(ns_path) -> NsData:
+def get_ne(ne_path: str) -> NeData:
+    grid_id_list = [0]
+    nsl1_list = [0]
+    nsl2_list = [0]
+    nsl3_list = [0]
+    nsl4_list = [0]
+    isl1_list = [[0,0,0,0,0,0,0,0,0,0]]
+    isl2_list = [[0,0,0,0,0,0,0,0,0,0]]
+    isl3_list = [[0,0,0,0,0,0,0,0,0,0]]
+    isl4_list = [[0,0,0,0,0,0,0,0,0,0]]
+    xe_list = [0.0]
+    ye_list = [0.0]
+    ze_list = [0.0]
+    under_suf_list = [0]
+    with open(ne_path, 'r', encoding='utf-8') as f:
+        for row_data in f:
+            row_data = row_data.strip().split(', ')
+            # 创建NeData对象
+            grid_id_list.append(int(row_data[0]))
+            nsl1 = int(row_data[1])
+            nsl2 = int(row_data[2])
+            nsl3 = int(row_data[3])
+            nsl4 = int(row_data[4])
+            nsl1_list.append(nsl1)
+            nsl2_list.append(nsl2)
+            nsl3_list.append(nsl3)
+            nsl4_list.append(nsl4)
+            isl1 = [0 for _ in range(10)]
+            isl2 = [0 for _ in range(10)]
+            isl3 = [0 for _ in range(10)]
+            isl4 = [0 for _ in range(10)]
+            for i in range(nsl1): 
+                isl1[i+1] = int(row_data[5+i]) 
+            for i in range(nsl2): 
+                isl2[i+1] = int(row_data[5+nsl1+i])
+            for i in range(nsl3): 
+                isl3[i+1] = int(row_data[5+nsl1+nsl2+i])
+            for i in range(nsl4): 
+                isl4[i+1] = int(row_data[5+nsl1+nsl2+nsl3+i])
+            isl1_list.append(isl1)
+            isl2_list.append(isl2)
+            isl3_list.append(isl3)
+            isl4_list.append(isl4)
+            xe_list.append(float(row_data[-4]))
+            ye_list.append(float(row_data[-3]))
+            ze_list.append(float(row_data[-2]))
+            under_suf_list.append(int(float(row_data[-1])))       
+    ne_data = NeData(grid_id_list,nsl1_list,nsl2_list,nsl3_list,nsl4_list,isl1_list,isl2_list,isl3_list,isl4_list,xe_list,ye_list,ze_list,under_suf_list)
+    return ne_data
+
+def get_ns(ns_path: str) -> NsData:
     edge_id_list = [0]
     ise_list = [[0,0,0,0,0]]
     dis_list = [0.0]
@@ -109,7 +109,7 @@ def get_ns(ns_path) -> NsData:
     with open(ns_path,'r',encoding='utf-8') as f:
         for rowdata in f:
             ise_row = []
-            rowdata = rowdata.strip().split(",")
+            rowdata = rowdata.strip().split(", ")
             edge_id_list.append(int(float(rowdata[0].strip())))
             ise_row = [
                 int(rowdata[1].strip()),
@@ -135,7 +135,7 @@ def get_ns(ns_path) -> NsData:
     )
     return ns_data
 
-def get_rainfall(rainfall_path) -> RainfallData:
+def get_rainfall(rainfall_path: str) -> RainfallData:
     rainfall_date_list = []
     rainfall_station_list = []
     rainfall_value_list = []
@@ -154,7 +154,7 @@ def get_rainfall(rainfall_path) -> RainfallData:
     )
     return rainfall
 
-def get_gate(gate_path) -> Gate:
+def get_gate(gate_path: str) -> Gate:
     ud_stream_list = []
     gate_height_list = []
     grid_id_list = []
@@ -175,7 +175,7 @@ def get_gate(gate_path) -> Gate:
     )
     return gate
 
-def get_tide(tide_path) -> TideData:
+def get_tide(tide_path: str) -> TideData:
     tide_date_list = []
     tide_time_list = []
     tide_value_list = []
@@ -333,19 +333,14 @@ def is_point_intersects_with_feature(x: float, y: float, feature_json: dict) -> 
 
 def apply_add_fence_action(fence_params: FenceParams, model_data: dict) -> dict:
 
-    print("----------------------1234567890----------------------")
+    logger.info("开始应用基围")
     elevation_delta = fence_params.elevation_delta
     landuse_type = fence_params.landuse_type
     feature_json = fence_params.feature
 
-    print(f"elevation_delta: {elevation_delta}")
-    print(f"landuse_type: {landuse_type}")
-    print(f"feature_json: {feature_json}")
-
     ne_data: NeData = model_data.get('ne', {})
     ns_data: NsData = model_data.get('ns', {})
     
-    print("开始遍历ne_data")
     for index in range(len(ne_data.xe_list)):
         x = ne_data.xe_list[index]
         y = ne_data.ye_list[index]
@@ -358,7 +353,6 @@ def apply_add_fence_action(fence_params: FenceParams, model_data: dict) -> dict:
                 ne_data.under_suf_list[index] = landuse_type
             logger.info(f"网格中心点 ({x}, {y}) 与feature相交，应用了地形变化: {elevation_delta} 和土地利用类型: {landuse_type}")
 
-    print("开始遍历ns_data")
     for index in range(len(ns_data.x_side_list)):
         x = ns_data.x_side_list[index]
         y = ns_data.y_side_list[index]
@@ -377,11 +371,39 @@ def apply_add_fence_action(fence_params: FenceParams, model_data: dict) -> dict:
     return model_data
 
 def apply_add_gate_action(gate_params: GateParams, model_data: dict) -> dict:
-    """应用闸门动作"""
-    print(f"应用闸门动作: {gate_params}")
+    
+    logger.info("开始应用闸门")
+    up_stream = gate_params.up_stream
+    down_stream = gate_params.down_stream
+    gate_height = gate_params.gate_height
+    feature_json = gate_params.feature
+
+    grid_ids = []
+    ne_data: NeData = model_data.get('ne', {})
+    for index in range(len(ne_data.xe_list)):
+        x = ne_data.xe_list[index]
+        y = ne_data.ye_list[index]
+        if is_point_intersects_with_feature(x, y, feature_json):
+            grid_ids.append(ne_data.grid_id_list[index])
+            logger.info("网格中心点 ({}, {}) 与feature相交，添加到闸门网格列表".format(x, y))
+
+    gate_data: Gate = model_data.get('gate')
+    gate_data.ud_stream_list.append(up_stream)
+    gate_data.ud_stream_list.append(down_stream)
+    gate_data.gate_height_list.append(gate_height)
+    gate_data.grid_id_list.append(grid_ids)
+
+    model_data['gate'] = gate_data
+
     return model_data
 
-def apply_transfer_water_action(transfer_water_params: TransferWaterParams, model_data: dict) -> dict:
-    """应用调水动作"""
-    print(f"应用调水动作: {transfer_water_params}")
-    return model_data
+def apply_transfer_water_action(transfer_water_params: TransferWaterParams, watergroups: list) -> list:
+
+    logger.info("开始应用调水")
+    watergroup = {
+        'from_grid': transfer_water_params.from_grid,
+        'to_grid': transfer_water_params.to_grid,
+        'q': transfer_water_params.q
+    }
+    watergroups.append(watergroup)
+    return watergroups
