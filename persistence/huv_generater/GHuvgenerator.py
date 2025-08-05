@@ -732,13 +732,14 @@ def get_dataset_bounds_in_4326_dict(dataset):
         "lower_right": {"lon": lr_lon, "lat": lr_lat}
     }
 
-def save_info_to_json(info_dict, bounds_dict, output_path):
+def save_info_to_json(info_dict, bounds_dict, huv_stats, output_path):
     """
-    将信息字典和边界字典合并后保存为 output_path/data.json 文件
+    将信息字典、边界字典和HUV统计信息合并后保存为 output_path/data.json 文件
 
     参数:
-        info_dict: reproject_dataset 返回的元信息字典（含尺寸和波段统计）
+        info_dict: reproject_dataset 返回的元信息字典（含尺寸信息）
         bounds_dict: get_dataset_bounds_in_4326_dict 返回的边界字典（经纬度）
+        huv_stats: process_huv_to_image_from_datasets 返回的HUV统计信息
         output_path: 目录路径，例如 'output/'，将在其中生成 'data.json'
     """
     # 合并为一个 JSON 对象
@@ -747,7 +748,7 @@ def save_info_to_json(info_dict, bounds_dict, output_path):
             "width": info_dict.get("width"),
             "height": info_dict.get("height")
         },
-        "bands": info_dict.get("bands", []),
+        "huv_stats": huv_stats,
         "bounds_4326": bounds_dict
     }
 
@@ -763,15 +764,17 @@ def save_info_to_json(info_dict, bounds_dict, output_path):
 
     print(f"信息已保存为 JSON 文件: {json_path}")
 
+
 # 示例使用
-def huv_generator(result_file, output_path, grid_result, bbox):
+def huvgenerator(result_file, output_path, grid_result, bbox):
     
     merged_result, merged_header = merge_with_result_data(grid_result, result_file)
+
     dataset, pixel_size = create_tiled_datasets(merged_result, bbox=bbox)
     
     # 对数据集进行下采样
     downsampled_dataset = downsample_dataset(dataset, pixel_size, target_resolution=20, no_data_value=-9999)
-    print("下采样完成！")
+
     if dataset is not None:
         dataset.FlushCache()
         dataset = None
@@ -779,16 +782,20 @@ def huv_generator(result_file, output_path, grid_result, bbox):
 
     dst_dataset,info = reproject_dataset(downsampled_dataset)
     bound = get_dataset_bounds_in_4326_dict(dst_dataset)
-    save_info_to_json(info, bound, output_path)
+    
+    # 获取HUV统计信息
+    huv_stats = process_huv_to_image_from_datasets(dst_dataset, output_path)
+    
+    save_info_to_json(info, bound, huv_stats, output_path)
     if downsampled_dataset is not None:
         downsampled_dataset.FlushCache()
         downsampled_dataset = None
-
-    process_huv_to_image_from_datasets(dst_dataset, output_path)
     
     with open(f"{output_path}/render.done", 'w', encoding='utf-8', newline='') as f:
         f.write('done')
+
     return 0
+
 
 # 示例使用
 # if __name__ == "__main__":

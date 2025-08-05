@@ -257,8 +257,15 @@ def process_huv_to_image_from_datasets_optimized(dataset, output_path: str, file
         future_height = executor.submit(process_height_task)
         future_uv = executor.submit(process_uv_task)
         
-        norm_height_data, _, _ = future_height.result()
-        norm_u_data, norm_v_data, _, _, _, _ = future_uv.result()
+        norm_height_data, min_height, max_height = future_height.result()
+        norm_u_data, norm_v_data, min_u, max_u, min_v, max_v = future_uv.result()
+
+    # 创建HUV统计信息字典
+    huv_stats = {
+        'depth': {'min_value': float(min_height), 'max_value': float(max_height)},
+        'u': {'min_value': float(min_u), 'max_value': float(max_u)},
+        'v': {'min_value': float(min_v), 'max_value': float(max_v)}
+    }
 
     # 创建HUV图像
     image = create_huv_rgba_image(norm_height_data, norm_u_data, norm_v_data)
@@ -272,8 +279,10 @@ def process_huv_to_image_from_datasets_optimized(dataset, output_path: str, file
     save_image(image, output_huv_path)
     
     print(f"NumPy向量化处理完成，耗时: {time.time() - start_time:.2f} 秒")
+    
+    return huv_stats
 
-def process_huv_to_image_from_datasets(dataset, output_path: str, file_suffix: str = "") -> None:
+def process_huv_to_image_from_datasets(dataset, output_path: str, file_suffix: str = ""):
     """
     保持向后兼容的函数，调用优化版本（使用NumPy向量化和多线程）
     
@@ -281,5 +290,9 @@ def process_huv_to_image_from_datasets(dataset, output_path: str, file_suffix: s
         dataset: 包含3个波段的GDAL数据集 (波段1: U, 波段2: V, 波段3: H)
         output_path: 输出路径
         file_suffix: 文件后缀
+    
+    返回:
+        huv_stats: HUV统计信息字典
     """
-    process_huv_to_image_from_datasets_optimized(dataset, output_path, file_suffix)
+    huv_stats = process_huv_to_image_from_datasets_optimized(dataset, output_path, file_suffix)
+    return huv_stats
