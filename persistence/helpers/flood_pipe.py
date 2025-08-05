@@ -1,8 +1,20 @@
 from dataclasses import dataclass
 from icrms.isimulation import FenceParams, GateParams, TransferWaterParams
 
+import math
 import logging
+from pyproj import Transformer
 logger = logging.getLogger(__name__)
+
+# 全局缓存的坐标转换器
+_transformer_4326_to_2326 = None
+
+def get_transformer_4326_to_2326():
+    """获取缓存的坐标转换器"""
+    global _transformer_4326_to_2326
+    if _transformer_4326_to_2326 is None:
+        _transformer_4326_to_2326 = Transformer.from_crs("EPSG:4326", "EPSG:2326", always_xy=True)
+    return _transformer_4326_to_2326
 
 @dataclass
 class NeData:
@@ -331,6 +343,69 @@ def is_point_intersects_with_feature(x: float, y: float, feature_json: dict) -> 
     # 其他几何类型暂不支持
     return False
 
+def transform_coordinates_4326_to_2326(lon: float, lat: float) -> tuple[float, float]:
+    """
+    快速坐标转换（使用缓存的转换器）
+    
+    Args:
+        lon: 经度 (EPSG:4326)
+        lat: 纬度 (EPSG:4326)
+        
+    Returns:
+        tuple[float, float]: 转换后的坐标 (x, y) in EPSG:2326
+    """
+    transformer = get_transformer_4326_to_2326()
+    x, y = transformer.transform(lon, lat)
+    return x, y
+
+def transform_point_list_4326_to_2326(point_list: list) -> list:
+    """
+    快速坐标点列表转换（使用缓存的转换器）
+    
+    Args:
+        point_list: 坐标点列表 [lon, lat] in EPSG:4326
+        
+    Returns:
+        list: 转换后的坐标点列表 [x, y] in EPSG:2326
+    """
+    if not isinstance(point_list, list) or len(point_list) < 2:
+        return point_list
+    
+    lon, lat = point_list[0], point_list[1]
+    x, y = transform_coordinates_4326_to_2326(lon, lat)
+    
+    return [x, y]
+
+def find_grid_for_point(x: float, y: float, ne_data: NeData) -> int | None:
+    """
+    根据坐标点找到对应的网格ID（使用最近邻算法）
+    
+    Args:
+        point_x: 点的x坐标
+        point_y: 点的y坐标
+        ne_data: 网格数据
+        
+    Returns:
+        int | None: 对应的网格ID，如果没找到则返回None
+    """
+    
+    min_distance = float('inf')
+    nearest_grid_id = None
+    
+    # 遍历所有网格，找到距离最近的网格中心点
+    for i in range(len(ne_data.xe_list)):
+        grid_x = ne_data.xe_list[i]
+        grid_y = ne_data.ye_list[i]
+        
+        # 计算欧几里得距离
+        distance = math.sqrt((x - grid_x)**2 + (y - grid_y)**2)
+        
+        if distance < min_distance:
+            min_distance = distance
+            nearest_grid_id = ne_data.grid_id_list[i]
+    
+    return nearest_grid_id
+
 def apply_add_fence_action(fence_params: FenceParams, model_data: dict) -> dict:
 
     logger.info("开始应用基围")
@@ -386,10 +461,26 @@ def apply_add_gate_action(gate_params: GateParams, model_data: dict) -> dict:
         if is_point_intersects_with_feature(x, y, feature_json):
             grid_ids.append(ne_data.grid_id_list[index])
             logger.info("网格中心点 ({}, {}) 与feature相交，添加到闸门网格列表".format(x, y))
+    
+    up_stream_grid_id = up_stream  
+    if isinstance(up_stream, list) and len(up_stream) >= 2:
+        transformed_up_stream = transform_point_list_4326_to_2326(up_stream)
+        up_grid_id = find_grid_for_point(transformed_up_stream[0], transformed_up_stream[1], ne_data)
+        if up_grid_id is not None:
+            up_stream_grid_id = up_grid_id
+            logger.info(f"上游坐标点 {up_stream} (4326) -> {transformed_up_stream} (2326) 对应网格ID: {up_grid_id}")
+    
+    down_stream_grid_id = down_stream
+    if isinstance(down_stream, list) and len(down_stream) >= 2:
+        transformed_down_stream = transform_point_list_4326_to_2326(down_stream)
+        down_grid_id = find_grid_for_point(transformed_down_stream[0], transformed_down_stream[1], ne_data)
+        if down_grid_id is not None:
+            down_stream_grid_id = down_grid_id
+            logger.info(f"下游坐标点 {down_stream} (4326) -> {transformed_down_stream} (2326) 对应网格ID: {down_grid_id}")
 
     gate_data: Gate = model_data.get('gate')
-    gate_data.ud_stream_list.append(up_stream)
-    gate_data.ud_stream_list.append(down_stream)
+    gate_data.ud_stream_list.append(up_stream_grid_id)
+    gate_data.ud_stream_list.append(down_stream_grid_id)
     gate_data.gate_height_list.append(gate_height)
     gate_data.grid_id_list.append(grid_ids)
 
@@ -397,12 +488,30 @@ def apply_add_gate_action(gate_params: GateParams, model_data: dict) -> dict:
 
     return model_data
 
-def apply_transfer_water_action(transfer_water_params: TransferWaterParams, watergroups: list) -> list:
+def apply_transfer_water_action(transfer_water_params: TransferWaterParams, model_data: dict, watergroups: list) -> list:
 
     logger.info("开始应用调水")
+    ne_data: NeData = model_data.get('ne', {})
+    
+    from_grid = transfer_water_params.from_grid
+    if isinstance(transfer_water_params.from_grid, list) and len(transfer_water_params.from_grid) >= 2:
+        transformed_from_grid = transform_point_list_4326_to_2326(from_grid)
+        from_grid_id = find_grid_for_point(transformed_from_grid[0], transformed_from_grid[1], ne_data)
+        if from_grid_id is not None:
+            from_grid = from_grid_id
+            logger.info(f"调水源头坐标点 {transfer_water_params.from_grid} (4326) -> {transformed_from_grid} (2326) 对应网格ID: {from_grid}")
+    
+    to_grid = transfer_water_params.to_grid
+    if isinstance(transfer_water_params.to_grid, list) and len(transfer_water_params.to_grid) >= 2:
+        transformed_to_grid = transform_point_list_4326_to_2326(to_grid)
+        to_grid_id = find_grid_for_point(transformed_to_grid[0], transformed_to_grid[1], ne_data)
+        if to_grid_id is not None:
+            to_grid = to_grid_id
+            logger.info(f"调水终点坐标点 {transfer_water_params.to_grid} (4326) -> {transformed_to_grid} (2326) 对应网格ID: {to_grid}")
+    
     watergroup = {
-        'from_grid': transfer_water_params.from_grid,
-        'to_grid': transfer_water_params.to_grid,
+        'from_grid': from_grid,
+        'to_grid': to_grid,
         'q': transfer_water_params.q
     }
     watergroups.append(watergroup)

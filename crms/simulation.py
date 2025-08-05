@@ -248,7 +248,7 @@ class Simulation(ISimulation):
                 elif action_type == ActionType.ADD_GATE:
                     self.model_data = apply_add_gate_action(GateParams(**params), self.model_data)
                 elif action_type == ActionType.TRANSFER_WATER:
-                    self.watergroups = apply_transfer_water_action(TransferWaterParams(**params), self.watergroups)
+                    self.watergroups = apply_transfer_water_action(TransferWaterParams(**params),  self.model_data, self.watergroups)
                 else:
                     print(f"未知的action_type: {action_type}")
 
