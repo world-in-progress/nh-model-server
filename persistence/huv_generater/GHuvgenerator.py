@@ -890,10 +890,6 @@ def huvgenerator(result_file, output_path, grid_result, bbox):
 
     # 对数据集进行下采样
     downsampled_dataset = downsample_dataset(dataset_M, pixel_size, target_resolution=20, no_data_value=-9999)
-
-    if dataset is not None:
-        dataset.FlushCache()
-        dataset = None
     # 处理下采样后的数据集
 
     info = dataset_information_get(downsampled_dataset)
