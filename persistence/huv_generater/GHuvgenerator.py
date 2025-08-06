@@ -1,7 +1,8 @@
 import os
 import time
 import numpy as np
-from osgeo import gdal, osr
+from osgeo import gdal, osr, ogr
+from shapely.geometry import Polygon
 from tqdm import tqdm
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -241,6 +242,89 @@ def merge_with_result_data(grid_result, result_file_path):
         print(f"  非零H值点数: {np.sum(h_col > 0)}/{len(merged_data)}")
     
     return merged_data, merged_header
+
+def grid_edge(merged_result):
+    """
+    计算多个格网组成的不规则多边形外边界。
+    使用缓冲区处理来消除悬挂线。
+    """
+    from shapely.geometry import box
+    from shapely.ops import unary_union
+    
+    grid_x = merged_result[:, 1]
+    grid_y = merged_result[:, 2]
+    half_len = merged_result[:, 3]
+
+    # 构造所有正方形 Polygon
+    polygons = [
+        box(x - l, y - l, x + l, y + l)
+        for x, y, l in zip(grid_x, grid_y, half_len)
+    ]
+
+    # 合并为一个大多边形
+    merged_polygon = unary_union(polygons)
+
+    # 如果结果是 MultiPolygon，只取最大的
+    if merged_polygon.geom_type == 'MultiPolygon':
+        merged_polygon = max(merged_polygon.geoms, key=lambda p: p.area)
+
+    # 使用小的缓冲区来平滑边界，消除悬挂线
+    # 先向外扩展一点，再向内收缩相同距离
+    buffer_distance = min(half_len) * 0.01  # 使用最小格网尺寸的1%作为缓冲距离
+    smoothed_polygon = merged_polygon.buffer(buffer_distance).buffer(-buffer_distance)
+    
+    # 如果缓冲后又变成MultiPolygon，再次取最大的
+    if smoothed_polygon.geom_type == 'MultiPolygon':
+        smoothed_polygon = max(smoothed_polygon.geoms, key=lambda p: p.area)
+
+    # 提取外边界坐标
+    boundary_points = list(smoothed_polygon.exterior.coords)
+
+    return boundary_points
+
+def save_boundary_to_shp_osgeo(boundary_points, output_path, epsg=2326):
+    """
+    使用 osgeo（GDAL/OGR）将边界 Polygon 存储为 .shp 文件，坐标系为 EPSG:2326
+
+    参数:
+        boundary_points: List[(x, y)]，边界坐标列表
+        output_path: 输出 shapefile 文件路径，例如 "output/boundary.shp"
+        epsg: 投影坐标系 EPSG 代码，默认 2326
+    """
+    # 创建 shapely Polygon，自动闭合
+    polygon = Polygon(boundary_points)
+
+    # 删除已有文件（Shapefile 有多个相关文件）
+    driver = ogr.GetDriverByName("ESRI Shapefile")
+    driver.DeleteDataSource(output_path)
+
+    # 创建 shapefile 数据源
+    datasource = driver.CreateDataSource(output_path)
+
+    # 设置空间参考
+    spatial_ref = osr.SpatialReference()
+    spatial_ref.ImportFromEPSG(epsg)
+
+    # 创建图层
+    layer = datasource.CreateLayer("boundary", spatial_ref, ogr.wkbPolygon)
+
+    # 添加属性字段（ID）
+    field = ogr.FieldDefn("ID", ogr.OFTInteger)
+    layer.CreateField(field)
+
+    # 构建 shapely -> ogr 的 Polygon 几何
+    ogr_polygon = ogr.CreateGeometryFromWkt(polygon.wkt)
+
+    # 创建 feature 并写入图层
+    feature_def = layer.GetLayerDefn()
+    feature = ogr.Feature(feature_def)
+    feature.SetField("ID", 1)
+    feature.SetGeometry(ogr_polygon)
+    layer.CreateFeature(feature)
+
+    # 清理
+    feature = None
+    datasource = None
 
 def create_tiled_datasets(merged_result, no_data_value=-9999, 
                          source_epsg=2326, bbox=None, pixel=None):
@@ -605,84 +689,6 @@ def transform_bbox(origin, target, bbox):
     
     return transformed_bbox
 
-def reproject_dataset(src_dataset, target_epsg=3857, resampling=gdal.GRA_Bilinear):
-    """
-    将栅格数据集重新投影到目标坐标系（默认 EPSG:3857），并返回元信息字典
-    """
-    print("开始投影转换...")
-
-    # 读取原始坐标系
-    src_proj = osr.SpatialReference()
-    src_wkt = src_dataset.GetProjection()
-    if not src_wkt:
-        raise RuntimeError("源数据缺少投影信息，请检查输入 DEM 文件。")
-
-    src_proj.ImportFromWkt(src_wkt)
-
-    # 创建目标坐标系
-    tgt_proj = osr.SpatialReference()
-    tgt_proj.ImportFromEPSG(target_epsg)
-    dst_wkt = tgt_proj.ExportToWkt()
-
-    # 获取原始数据的 geoTransform 和尺寸信息
-    geo_transform = src_dataset.GetGeoTransform()
-    print(geo_transform)
-    width = src_dataset.RasterXSize
-    height = src_dataset.RasterYSize
-
-    if width <= 0 or height <= 0:
-        raise RuntimeError("源数据尺寸异常（宽或高 <= 0）")
-
-    if geo_transform is None:
-        raise RuntimeError("源数据缺少地理转换信息（GeoTransform）")
-
-    # 设置 Warp 重采样选项
-    warp_options = gdal.WarpOptions(
-        dstSRS=dst_wkt,
-        resampleAlg=resampling,
-        format='MEM',
-        multithread=True
-    )
-
-    # 尝试执行重投影
-    dst_dataset = gdal.Warp('', src_dataset, options=warp_options)
-
-    if dst_dataset is None:
-        raise RuntimeError("重投影失败，请检查输入数据或坐标系设置。")
-
-    print("投影转换完成！开始收集信息...")
-
-    # 构建返回信息
-    info = {
-        "width": dst_dataset.RasterXSize,
-        "height": dst_dataset.RasterYSize,
-        "bands": []
-    }
-
-    for band_idx in range(1, dst_dataset.RasterCount + 1):
-        band = dst_dataset.GetRasterBand(band_idx)
-        stats = band.GetStatistics(True, True)
-        
-        # 获取波段描述，如果没有则使用默认名称
-        band_description = band.GetDescription()
-        if not band_description:
-            # 如果没有描述，使用默认的波段名称
-            default_names = ["U_velocity", "V_velocity", "H_depth"]
-            if band_idx <= len(default_names):
-                band_description = default_names[band_idx - 1]
-            else:
-                band_description = f"Band_{band_idx}"
-        
-        band_info = {
-            "band_index": band_idx,
-            "band_name": band_description,
-            "min": stats[0],
-            "max": stats[1]
-        }
-        info["bands"].append(band_info)
-
-    return dst_dataset, info
-
 def get_dataset_bounds_in_4326_dict(dataset):
     """
     获取数据集左上角和右下角在 EPSG:4326 坐标系下的经纬度坐标
@@ -764,6 +770,114 @@ def save_info_to_json(info_dict, bounds_dict, huv_stats, output_path):
 
     print(f"信息已保存为 JSON 文件: {json_path}")
 
+def dataset_information_get(dst_dataset):
+    if dst_dataset is None:
+        raise RuntimeError("源数据无效！")
+    # 构建返回信息
+    info = {
+        "width": dst_dataset.RasterXSize,
+        "height": dst_dataset.RasterYSize,
+        "bands": []
+    }
+
+    for band_idx in range(1, dst_dataset.RasterCount + 1):
+        band = dst_dataset.GetRasterBand(band_idx)
+        stats = band.GetStatistics(True, True)
+        
+        # 获取波段描述，如果没有则使用默认名称
+        band_description = band.GetDescription()
+        if not band_description:
+            # 如果没有描述，使用默认的波段名称
+            default_names = ["U_velocity", "V_velocity", "H_depth"]
+            if band_idx <= len(default_names):
+                band_description = default_names[band_idx - 1]
+            else:
+                band_description = f"Band_{band_idx}"
+        
+        band_info = {
+            "band_index": band_idx,
+            "band_name": band_description,
+            "min": stats[0],
+            "max": stats[1]
+        }
+        info["bands"].append(band_info)
+    return info
+
+def reproject_dataset(src_dataset, target_epsg=3857, resampling=gdal.GRA_Bilinear):
+    """
+    将栅格数据集重新投影到目标坐标系（默认 EPSG:3857），并返回元信息字典
+    """
+    print("开始投影转换...")
+
+    # 读取原始坐标系
+    src_proj = osr.SpatialReference()
+    src_wkt = src_dataset.GetProjection()
+    if not src_wkt:
+        raise RuntimeError("源数据缺少投影信息，请检查输入 DEM 文件。")
+
+    src_proj.ImportFromWkt(src_wkt)
+
+    # 创建目标坐标系
+    tgt_proj = osr.SpatialReference()
+    tgt_proj.ImportFromEPSG(target_epsg)
+    dst_wkt = tgt_proj.ExportToWkt()
+
+    # 获取原始数据的 geoTransform 和尺寸信息
+    geo_transform = src_dataset.GetGeoTransform()
+    print(geo_transform)
+    width = src_dataset.RasterXSize
+    height = src_dataset.RasterYSize
+
+    if width <= 0 or height <= 0:
+        raise RuntimeError("源数据尺寸异常（宽或高 <= 0）")
+
+    if geo_transform is None:
+        raise RuntimeError("源数据缺少地理转换信息（GeoTransform）")
+
+    # 设置 Warp 重采样选项
+    warp_options = gdal.WarpOptions(
+        dstSRS=dst_wkt,
+        resampleAlg=resampling,
+        format='MEM',
+        multithread=True
+    )
+
+    # 尝试执行重投影
+    dst_dataset = gdal.Warp('', src_dataset, options=warp_options)
+
+    if dst_dataset is None:
+        raise RuntimeError("重投影失败，请检查输入数据或坐标系设置。")
+
+    print("投影转换完成！开始收集信息...")
+
+    return dst_dataset
+
+def save_gdal_dataset_to_tif(dataset, output_path):
+    """
+    保存 GDAL 数据集为 GeoTIFF 文件。
+
+    参数:
+        dataset: GDAL 数据集对象
+        output_path: 输出文件路径，例如 "./output.tif"
+    """
+    print(f"开始保存数据集到文件: {output_path}")
+
+    # 获取 GDAL 驱动
+    driver = gdal.GetDriverByName("GTiff")
+    if driver is None:
+        raise RuntimeError("无法获取 GDAL GTiff 驱动")
+
+    # 创建输出文件
+    output_file = os.path.join(output_path, "huv_M.tif")
+    output_dataset = driver.CreateCopy(output_file, dataset, 0)
+    if output_dataset is None:
+        raise RuntimeError(f"保存文件失败: {output_path}")
+
+    # 刷新缓存并释放资源
+    output_dataset.FlushCache()
+    output_dataset = None
+
+    print(f"数据集已成功保存到: {output_path}")
 
 # 示例使用
 def huvgenerator(result_file, output_path, grid_result, bbox):
@@ -771,26 +885,33 @@ def huvgenerator(result_file, output_path, grid_result, bbox):
     merged_result, merged_header = merge_with_result_data(grid_result, result_file)
 
     dataset, pixel_size = create_tiled_datasets(merged_result, bbox=bbox)
-    
+    dataset_M = reproject_dataset(dataset)
+    save_gdal_dataset_to_tif(dataset_M, output_path)
+
     # 对数据集进行下采样
-    downsampled_dataset = downsample_dataset(dataset, pixel_size, target_resolution=20, no_data_value=-9999)
+    downsampled_dataset = downsample_dataset(dataset_M, pixel_size, target_resolution=20, no_data_value=-9999)
 
     if dataset is not None:
         dataset.FlushCache()
         dataset = None
     # 处理下采样后的数据集
 
-    dst_dataset,info = reproject_dataset(downsampled_dataset)
-    bound = get_dataset_bounds_in_4326_dict(dst_dataset)
+    info = dataset_information_get(downsampled_dataset)
+    bound = get_dataset_bounds_in_4326_dict(downsampled_dataset)
     
     # 获取HUV统计信息
-    huv_stats = process_huv_to_image_from_datasets(dst_dataset, output_path)
+    huv_stats = process_huv_to_image_from_datasets(downsampled_dataset, output_path)
     
     save_info_to_json(info, bound, huv_stats, output_path)
     if downsampled_dataset is not None:
         downsampled_dataset.FlushCache()
         downsampled_dataset = None
-    
+    if dataset is not None:
+        dataset.FlushCache()
+        dataset = None
+    if dataset_M is not None:
+        dataset_M.FlushCache()
+        dataset_M = None
     with open(f"{output_path}/render.done", 'w', encoding='utf-8', newline='') as f:
         f.write('done')
 
