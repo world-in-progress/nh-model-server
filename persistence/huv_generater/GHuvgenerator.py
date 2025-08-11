@@ -691,6 +691,7 @@ def transform_bbox(origin, target, bbox):
 
 def get_dataset_bounds(dataset):
     """
+    获取数据集四个角点在 EPSG:4326 坐标系下的经纬度坐标
 
     参数:
         dataset: 一个 GDAL 数据集对象
@@ -882,6 +883,7 @@ def huv_generator(result_file, output_path, grid_result, bbox):
     downsampled_dataset0 = downsample_dataset(dataset, pixel_size, target_resolution=20, no_data_value=-9999)
     # 处理下采样后的数据集
     downsampled_dataset = reproject_dataset(downsampled_dataset0)
+
     info = dataset_information_get(downsampled_dataset)
     bound = get_dataset_bounds(downsampled_dataset)
     
