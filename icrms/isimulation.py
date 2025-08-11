@@ -1,7 +1,7 @@
 import c_two as cc
 from enum import Enum
 from pydantic import BaseModel
-from typing import Union, Any
+from typing import Union, Any, List
 
 class CreateSimulationBody(BaseModel):
     name: str
@@ -18,14 +18,14 @@ class FenceParams(BaseModel):
     feature: dict[str, Any]
 
 class TransferWaterParams(BaseModel):
-    from_grid: int
-    to_grid: int
+    from_grid: Union[int, List[float]]  # 支持整数ID或坐标数组
+    to_grid: Union[int, List[float]]    # 支持整数ID或坐标数组
     q: float  # 通量
     
 class GateParams(BaseModel):
-    up_stream: int
-    down_stream: int
-    gate_height: int
+    up_stream: List[float]
+    down_stream: List[float]
+    gate_height: float
     feature: dict[str, Any]
 
 class HumanAction(BaseModel):

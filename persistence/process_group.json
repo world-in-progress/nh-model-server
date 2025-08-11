@@ -28,7 +28,7 @@
     "processes": [
       {
         "name": "flood",
-        "script": "coupled_0801.Flood_new801",
+        "script": "coupled_0801.Flood_new0801",
         "entrypoint": "run_flood",
         "parameters": [
           {
@@ -79,7 +79,7 @@
       },
       {
         "name": "pipe",
-        "script": "coupled_0801.pipe_NH801",
+        "script": "coupled_0801.pipe_NH0801",
         "entrypoint": "run_pipe_simulation",
         "parameters": [
           {

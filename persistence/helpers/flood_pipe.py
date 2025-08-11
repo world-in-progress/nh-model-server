@@ -76,7 +76,7 @@ def get_ne(ne_path: str) -> NeData:
     under_suf_list = [0]
     with open(ne_path, 'r', encoding='utf-8') as f:
         for row_data in f:
-            row_data = row_data.strip().split(', ')
+            row_data = row_data.strip().split(',')
             # 创建NeData对象
             grid_id_list.append(int(row_data[0]))
             nsl1 = int(row_data[1])
@@ -121,7 +121,7 @@ def get_ns(ns_path: str) -> NsData:
     with open(ns_path,'r',encoding='utf-8') as f:
         for rowdata in f:
             ise_row = []
-            rowdata = rowdata.strip().split(", ")
+            rowdata = rowdata.strip().split(",")
             edge_id_list.append(int(float(rowdata[0].strip())))
             ise_row = [
                 int(rowdata[1].strip()),
@@ -241,7 +241,7 @@ def is_point_in_polygon(x: float, y: float, polygon_coords: list) -> bool:
     
     return inside
 
-def is_point_intersects_with_feature(x: float, y: float, feature_json: dict) -> bool:
+def is_point_intersects_with_feature(x: float, y: float, feature_json: dict, ne_data: NeData = None) -> bool:
     """
     判断点是否与GeoJSON feature或FeatureCollection相交
     
@@ -249,6 +249,7 @@ def is_point_intersects_with_feature(x: float, y: float, feature_json: dict) -> 
         x: 点的x坐标
         y: 点的y坐标
         feature_json: GeoJSON格式的地理要素（Feature或FeatureCollection）
+        ne_data: 网格数据，用于动态计算缓冲区距离
         
     Returns:
         bool: True表示相交，False表示不相交
@@ -261,7 +262,7 @@ def is_point_intersects_with_feature(x: float, y: float, feature_json: dict) -> 
         features = feature_json.get('features', [])
         # 只要与任何一个feature相交就返回True
         for feature in features:
-            if is_point_intersects_with_feature(x, y, feature):
+            if is_point_intersects_with_feature(x, y, feature, ne_data):
                 return True
         return False
     
@@ -322,26 +323,92 @@ def is_point_intersects_with_feature(x: float, y: float, feature_json: dict) -> 
         return False
     
     elif geom_type == 'linestring':
-        # 对于LineString，检查点是否在线上（这里使用简单的距离判断）
-        # 实际应用中可能需要更复杂的线段相交算法
+        # 对于LineString，动态计算缓冲区距离
         if len(coordinates) < 2:
             return False
         
-        tolerance = 1e-6  # 容差
+        # 动态计算缓冲区距离
+        buffer_distance = calculate_dynamic_buffer_distance(x, y, ne_data)
+        
         for i in range(len(coordinates) - 1):
             x1, y1 = coordinates[i]
             x2, y2 = coordinates[i + 1]
             
-            # 使用点到线段的距离判断
-            # 这里简化处理，实际可能需要更精确的算法
-            if abs((y2 - y1) * x - (x2 - x1) * y + x2 * y1 - y2 * x1) / \
-               ((y2 - y1) ** 2 + (x2 - x1) ** 2) ** 0.5 < tolerance:
+            # 计算点到线段的最短距离
+            distance = point_to_line_segment_distance(x, y, x1, y1, x2, y2)
+            
+            # 如果距离小于动态计算的缓冲区距离，认为相交
+            if distance <= buffer_distance:
                 return True
         
         return False
     
     # 其他几何类型暂不支持
     return False
+
+def calculate_dynamic_buffer_distance(x: float, y: float, ne_data: NeData) -> float:
+    """
+    动态计算缓冲区距离，基于当前点与最近邻网格点的距离
+    
+    Args:
+        x: 当前点的x坐标
+        y: 当前点的y坐标
+        ne_data: 网格数据
+        
+    Returns:
+        float: 动态计算的缓冲区距离
+    """
+    if not ne_data or len(ne_data.xe_list) < 2:
+        return 50.0  # 默认值
+    
+    min_distance = float('inf')
+    
+    # 找到最近的邻居网格点
+    for i in range(len(ne_data.xe_list)):
+        grid_x = ne_data.xe_list[i]
+        grid_y = ne_data.ye_list[i]
+        
+        # 跳过当前点本身
+        if abs(grid_x - x) < 1e-6 and abs(grid_y - y) < 1e-6:
+            continue
+            
+        distance = math.sqrt((x - grid_x)**2 + (y - grid_y)**2)
+        if distance < min_distance:
+            min_distance = distance
+    
+    # 使用最近邻距离的一半作为缓冲区距离
+    # 这样可以确保不会过度扩大影响范围
+    return min_distance / 2.0 if min_distance != float('inf') else 50.0
+
+def point_to_line_segment_distance(px: float, py: float, x1: float, y1: float, x2: float, y2: float) -> float:
+    """
+    计算点到线段的最短距离
+    
+    Args:
+        px, py: 点坐标
+        x1, y1: 线段起点
+        x2, y2: 线段终点
+        
+    Returns:
+        float: 点到线段的最短距离
+    """
+    # 线段向量
+    dx = x2 - x1
+    dy = y2 - y1
+    
+    # 如果线段退化为点
+    if dx == 0 and dy == 0:
+        return math.sqrt((px - x1) ** 2 + (py - y1) ** 2)
+    
+    # 计算点在线段上的投影参数t (0 <= t <= 1表示投影在线段上)
+    t = max(0, min(1, ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)))
+    
+    # 计算投影点坐标
+    proj_x = x1 + t * dx
+    proj_y = y1 + t * dy
+    
+    # 计算点到投影点的距离
+    return math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
 
 def transform_coordinates_4326_to_2326(lon: float, lat: float) -> tuple[float, float]:
     """
@@ -458,9 +525,11 @@ def apply_add_gate_action(gate_params: GateParams, model_data: dict) -> dict:
     for index in range(len(ne_data.xe_list)):
         x = ne_data.xe_list[index]
         y = ne_data.ye_list[index]
-        if is_point_intersects_with_feature(x, y, feature_json):
+        if is_point_intersects_with_feature(x, y, feature_json, ne_data):  # 传递ne_data
             grid_ids.append(ne_data.grid_id_list[index])
             logger.info("网格中心点 ({}, {}) 与feature相交，添加到闸门网格列表".format(x, y))
+    
+    logger.info(f"grid_ids:{grid_ids}")
     
     up_stream_grid_id = up_stream  
     if isinstance(up_stream, list) and len(up_stream) >= 2:
@@ -485,6 +554,7 @@ def apply_add_gate_action(gate_params: GateParams, model_data: dict) -> dict:
     gate_data.grid_id_list.append(grid_ids)
 
     model_data['gate'] = gate_data
+    
 
     return model_data
 

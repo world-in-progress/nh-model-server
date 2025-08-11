@@ -689,9 +689,8 @@ def transform_bbox(origin, target, bbox):
     
     return transformed_bbox
 
-def get_dataset_bounds_in_4326_dict(dataset):
+def get_dataset_bounds(dataset):
     """
-    获取数据集左上角和右下角在 EPSG:4326 坐标系下的经纬度坐标
 
     参数:
         dataset: 一个 GDAL 数据集对象
@@ -700,7 +699,9 @@ def get_dataset_bounds_in_4326_dict(dataset):
         字典格式：
         {
             "upper_left": {"lon": ..., "lat": ...},
-            "lower_right": {"lon": ..., "lat": ...}
+            "lower_left": {"lon": ..., "lat": ...},
+            "lower_right": {"lon": ..., "lat": ...},
+            "upper_right": {"lon": ..., "lat": ...}
         }
     """
     # 获取地理变换参数
@@ -712,30 +713,19 @@ def get_dataset_bounds_in_4326_dict(dataset):
     width = dataset.RasterXSize
     height = dataset.RasterYSize
 
-    # 左上角 (ul) 和右下角 (lr) 的原始坐标
-    ul_x = gt[0]
-    ul_y = gt[3]
-    lr_x = gt[0] + width * gt[1] + height * gt[2]
-    lr_y = gt[3] + width * gt[4] + height * gt[5]
-
-    # 创建坐标系对象
-    src_srs = osr.SpatialReference()
-    src_srs.ImportFromWkt(dataset.GetProjection())
-
-    tgt_srs = osr.SpatialReference()
-    tgt_srs.ImportFromEPSG(4326)  # WGS84
-
-    # 坐标转换器
-    transform = osr.CoordinateTransformation(src_srs, tgt_srs)
-
-    # 坐标转换
-    ul_lat, ul_lon, _ = transform.TransformPoint(ul_x, ul_y)
-    lr_lat, lr_lon, _ = transform.TransformPoint(lr_x, lr_y)
+    # 四个角点的原始坐标
+    ul_x, ul_y = gt[0], gt[3]  # 左上角
+    lr_x, lr_y = gt[0] + width * gt[1] + height * gt[2], gt[3] + width * gt[4] + height * gt[5]  # 右下角
+    ll_x, ll_y = ul_x, lr_y  # 左下角
+    ur_x, ur_y = lr_x, ul_y  # 右上角
 
     # 返回结果
     return {
-        "upper_left": {"lon": ul_lon, "lat": ul_lat},
-        "lower_right": {"lon": lr_lon, "lat": lr_lat}
+        
+        "lower_left": {"lon": ll_x, "lat": ll_y},
+        "lower_right": {"lon": lr_x, "lat": lr_y},
+        "upper_right": {"lon": ur_x, "lat": ur_y},
+        "upper_left": {"lon": ul_x, "lat": ul_y},
     }
 
 def save_info_to_json(info_dict, bounds_dict, huv_stats, output_path):
@@ -880,7 +870,7 @@ def save_gdal_dataset_to_tif(dataset, output_path):
     print(f"数据集已成功保存到: {output_path}")
 
 # 示例使用
-def huvgenerator(result_file, output_path, grid_result, bbox):
+def huv_generator(result_file, output_path, grid_result, bbox):
     
     merged_result, merged_header = merge_with_result_data(grid_result, result_file)
 
@@ -889,11 +879,11 @@ def huvgenerator(result_file, output_path, grid_result, bbox):
     save_gdal_dataset_to_tif(dataset_M, output_path)
 
     # 对数据集进行下采样
-    downsampled_dataset = downsample_dataset(dataset_M, pixel_size, target_resolution=20, no_data_value=-9999)
+    downsampled_dataset0 = downsample_dataset(dataset, pixel_size, target_resolution=20, no_data_value=-9999)
     # 处理下采样后的数据集
-
+    downsampled_dataset = reproject_dataset(downsampled_dataset0)
     info = dataset_information_get(downsampled_dataset)
-    bound = get_dataset_bounds_in_4326_dict(downsampled_dataset)
+    bound = get_dataset_bounds(downsampled_dataset)
     
     # 获取HUV统计信息
     huv_stats = process_huv_to_image_from_datasets(downsampled_dataset, output_path)
@@ -902,12 +892,16 @@ def huvgenerator(result_file, output_path, grid_result, bbox):
     if downsampled_dataset is not None:
         downsampled_dataset.FlushCache()
         downsampled_dataset = None
+    if downsampled_dataset0 is not None:
+        downsampled_dataset0.FlushCache()
+        downsampled_dataset0 = None
     if dataset is not None:
         dataset.FlushCache()
         dataset = None
     if dataset_M is not None:
         dataset_M.FlushCache()
         dataset_M = None
+        
     with open(f"{output_path}/render.done", 'w', encoding='utf-8', newline='') as f:
         f.write('done')
 
