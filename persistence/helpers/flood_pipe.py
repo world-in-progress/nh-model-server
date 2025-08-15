@@ -3,6 +3,7 @@ from icrms.isimulation import FenceParams, GateParams, TransferWaterParams
 
 import math
 import logging
+import numpy as np
 from pyproj import Transformer
 logger = logging.getLogger(__name__)
 
@@ -443,13 +444,50 @@ def transform_point_list_4326_to_2326(point_list: list) -> list:
     
     return [x, y]
 
+def transform_feature_4326_to_2326(feature: dict) -> dict:
+    """
+    将GeoJSON feature从EPSG:4326转换为EPSG:2326
+    
+    Args:
+        feature: GeoJSON格式的地理要素（Feature或FeatureCollection）
+        
+    Returns:
+        dict: 转换后的GeoJSON feature
+    """
+    if not feature:
+        return feature
+        
+    def transform_coordinates(coords):
+        if isinstance(coords[0], (int, float)):
+            # 单个坐标点
+            x, y = transform_coordinates_4326_to_2326(coords[0], coords[1])
+            return [x, y]
+        return [transform_coordinates(c) for c in coords]
+    
+    # 深拷贝以避免修改原始数据
+    import copy
+    feature = copy.deepcopy(feature)
+    
+    # 处理FeatureCollection
+    if feature.get('type') == 'FeatureCollection':
+        for f in feature.get('features', []):
+            if 'geometry' in f:
+                f['geometry']['coordinates'] = transform_coordinates(f['geometry']['coordinates'])
+        return feature
+    
+    # 处理单个Feature
+    if 'geometry' in feature:
+        feature['geometry']['coordinates'] = transform_coordinates(feature['geometry']['coordinates'])
+    
+    return feature
+
 def find_grid_for_point(x: float, y: float, ne_data: NeData) -> int | None:
     """
     根据坐标点找到对应的网格ID（使用最近邻算法）
     
     Args:
-        point_x: 点的x坐标
-        point_y: 点的y坐标
+        x: 点的x坐标
+        y: 点的y坐标
         ne_data: 网格数据
         
     Returns:
@@ -473,12 +511,133 @@ def find_grid_for_point(x: float, y: float, ne_data: NeData) -> int | None:
     
     return nearest_grid_id
 
+def find_grid_for_feature_point(feature_json: dict, ne_data: NeData, grid_result: np.ndarray = None) -> list[int]:
+    """
+    根据GeoJSON格式的点要素找到对应的网格ID列表
+    
+    Args:
+        feature_json: GeoJSON格式的地理要素（Feature或FeatureCollection）
+        ne_data: 网格数据
+        grid_result: 网格数据数组，每行包含 [网格ID, 中心x坐标, 中心y坐标, 半边长]
+        
+    Returns:
+        list[int]: 与点要素对应的网格ID列表
+    """
+    if not feature_json:
+        return []
+    
+    grid_ids = []
+    
+    # 检查是否是FeatureCollection
+    if feature_json.get('type') == 'FeatureCollection':
+        features = feature_json.get('features', [])
+        
+        # 处理FeatureCollection中的每个Feature
+        for feature in features:
+            grid_ids.extend(find_grid_for_feature_point(feature, ne_data, grid_result))
+            
+        # 去重
+        return list(set(grid_ids))
+    
+    # 处理单个Feature
+    if 'geometry' not in feature_json:
+        return []
+    
+    geometry = feature_json['geometry']
+    geom_type = geometry.get('type', '').lower()
+    coordinates = geometry.get('coordinates', [])
+    
+    if geom_type == 'point':
+        # 对于Point，找到对应的网格ID
+        if len(coordinates) >= 2:
+            x, y = coordinates[0], coordinates[1]
+            if grid_result is not None:
+                # 使用grid_result查找点所在的网格
+                grid_id = find_grid_for_point_using_grid_result(x, y, grid_result)
+                if grid_id is not None:
+                    grid_ids.append(grid_id)
+                    logger.info(f"点坐标 ({x}, {y}) 使用grid_result对应网格ID: {grid_id}")
+                else:
+                    # 如果使用grid_result找不到，回退到使用ne_data
+                    grid_id = find_grid_for_point(x, y, ne_data)
+                    if grid_id is not None:
+                        grid_ids.append(grid_id)
+                        logger.info(f"点坐标 ({x}, {y}) 回退使用ne_data对应网格ID: {grid_id}")
+            else:
+                # 如果没有提供grid_result，使用ne_data
+                grid_id = find_grid_for_point(x, y, ne_data)
+                if grid_id is not None:
+                    grid_ids.append(grid_id)
+                    logger.info(f"点坐标 ({x}, {y}) 对应网格ID: {grid_id}")
+    
+    elif geom_type == 'multipoint':
+        # 对于MultiPoint，处理每个点
+        for point_coords in coordinates:
+            if len(point_coords) >= 2:
+                x, y = point_coords[0], point_coords[1]
+                if grid_result is not None:
+                    # 使用grid_result查找点所在的网格
+                    grid_id = find_grid_for_point_using_grid_result(x, y, grid_result)
+                    if grid_id is not None:
+                        grid_ids.append(grid_id)
+                        logger.info(f"多点坐标 ({x}, {y}) 使用grid_result对应网格ID: {grid_id}")
+                    else:
+                        # 如果使用grid_result找不到，回退到使用ne_data
+                        grid_id = find_grid_for_point(x, y, ne_data)
+                        if grid_id is not None:
+                            grid_ids.append(grid_id)
+                            logger.info(f"多点坐标 ({x}, {y}) 回退使用ne_data对应网格ID: {grid_id}")
+                else:
+                    # 如果没有提供grid_result，使用ne_data
+                    grid_id = find_grid_for_point(x, y, ne_data)
+                    if grid_id is not None:
+                        grid_ids.append(grid_id)
+                        logger.info(f"多点坐标 ({x}, {y}) 对应网格ID: {grid_id}")
+    
+    return grid_ids
+
+def find_grid_for_point_using_grid_result(x: float, y: float, grid_result: np.ndarray) -> int | None:
+    """
+    使用grid_result查找点所在的网格ID
+    
+    Args:
+        x: 点的x坐标
+        y: 点的y坐标
+        grid_result: 网格数据数组，每行包含 [网格ID, 中心x坐标, 中心y坐标, 半边长]
+        
+    Returns:
+        int | None: 对应的网格ID，如果没找到则返回None
+    """
+    if grid_result is None or len(grid_result) == 0:
+        return None
+    
+    for grid_row in grid_result:
+        if len(grid_row) < 4:
+            continue
+        
+        grid_id = int(grid_row[0])
+        grid_center_x = float(grid_row[1])
+        grid_center_y = float(grid_row[2])
+        half_size = float(grid_row[3])
+        
+        # 计算网格的边界
+        min_x = grid_center_x - half_size
+        max_x = grid_center_x + half_size
+        min_y = grid_center_y - half_size
+        max_y = grid_center_y + half_size
+        
+        # 检查点是否在网格内
+        if min_x <= x <= max_x and min_y <= y <= max_y:
+            return grid_id
+    
+    return None
+
 def apply_add_fence_action(fence_params: FenceParams, model_data: dict) -> dict:
 
     logger.info("开始应用基围")
     elevation_delta = fence_params.elevation_delta
     landuse_type = fence_params.landuse_type
-    feature_json = fence_params.feature
+    feature_json = transform_feature_4326_to_2326(fence_params.feature)
 
     ne_data: NeData = model_data.get('ne', {})
     ns_data: NsData = model_data.get('ns', {})
@@ -512,40 +671,37 @@ def apply_add_fence_action(fence_params: FenceParams, model_data: dict) -> dict:
     
     return model_data
 
-def apply_add_gate_action(gate_params: GateParams, model_data: dict) -> dict:
-    
+def apply_add_gate_action(gate_params: GateParams, model_data: dict, grid_result: np.ndarray) -> dict:
+
     logger.info("开始应用闸门")
     up_stream = gate_params.up_stream
     down_stream = gate_params.down_stream
     gate_height = gate_params.gate_height
-    feature_json = gate_params.feature
+    feature_json = transform_feature_4326_to_2326(gate_params.feature)
 
-    grid_ids = []
-    ne_data: NeData = model_data.get('ne', {})
-    for index in range(len(ne_data.xe_list)):
-        x = ne_data.xe_list[index]
-        y = ne_data.ye_list[index]
-        if is_point_intersects_with_feature(x, y, feature_json, ne_data):  # 传递ne_data
-            grid_ids.append(ne_data.grid_id_list[index])
-            logger.info("网格中心点 ({}, {}) 与feature相交，添加到闸门网格列表".format(x, y))
+    print(f"闸门信息: {model_data['gate']}")
+
+    # 获取与闸门相交的网格号
+    grid_ids = get_grids_intersecting_with_line(feature_json, grid_result)
+    logger.info(f"与闸门相交的网格号: {grid_ids}")
     
-    logger.info(f"grid_ids:{grid_ids}")
+    # 处理上游点
+    up_stream_grid_id = up_stream
+    transformed_up_stream = transform_point_list_4326_to_2326(up_stream)
+    # 优先使用grid_result查找
+    up_grid_id = find_grid_for_point_using_grid_result(transformed_up_stream[0], transformed_up_stream[1], grid_result)
+    if up_grid_id is not None:
+        up_stream_grid_id = up_grid_id
+        logger.info(f"上游坐标点 {up_stream} (4326) -> {transformed_up_stream} (2326) 对应网格ID: {up_grid_id}")
     
-    up_stream_grid_id = up_stream  
-    if isinstance(up_stream, list) and len(up_stream) >= 2:
-        transformed_up_stream = transform_point_list_4326_to_2326(up_stream)
-        up_grid_id = find_grid_for_point(transformed_up_stream[0], transformed_up_stream[1], ne_data)
-        if up_grid_id is not None:
-            up_stream_grid_id = up_grid_id
-            logger.info(f"上游坐标点 {up_stream} (4326) -> {transformed_up_stream} (2326) 对应网格ID: {up_grid_id}")
-    
+    # 处理下游点
     down_stream_grid_id = down_stream
-    if isinstance(down_stream, list) and len(down_stream) >= 2:
-        transformed_down_stream = transform_point_list_4326_to_2326(down_stream)
-        down_grid_id = find_grid_for_point(transformed_down_stream[0], transformed_down_stream[1], ne_data)
-        if down_grid_id is not None:
-            down_stream_grid_id = down_grid_id
-            logger.info(f"下游坐标点 {down_stream} (4326) -> {transformed_down_stream} (2326) 对应网格ID: {down_grid_id}")
+    transformed_down_stream = transform_point_list_4326_to_2326(down_stream)
+    # 优先使用grid_result查找
+    down_grid_id = find_grid_for_point_using_grid_result(transformed_down_stream[0], transformed_down_stream[1], grid_result)
+    if down_grid_id is not None:
+        down_stream_grid_id = down_grid_id
+        logger.info(f"下游坐标点 {down_stream} (4326) -> {transformed_down_stream} (2326) 对应网格ID: {down_grid_id}")
 
     gate_data: Gate = model_data.get('gate')
     gate_data.ud_stream_list.append(up_stream_grid_id)
@@ -553,31 +709,228 @@ def apply_add_gate_action(gate_params: GateParams, model_data: dict) -> dict:
     gate_data.gate_height_list.append(gate_height)
     gate_data.grid_id_list.append(grid_ids)
 
-    model_data['gate'] = gate_data
-    
 
+
+    model_data['gate'] = gate_data
+
+    print(f"更新后的闸门信息: {model_data['gate']}")
+    
     return model_data
 
-def apply_transfer_water_action(transfer_water_params: TransferWaterParams, model_data: dict, watergroups: list) -> list:
+def get_grids_intersecting_with_line(feature_json: dict, grid_result: np.ndarray) -> list:
+    """
+    获取与线要素相交的网格ID列表
+    
+    Args:
+        feature_json: GeoJSON格式的地理要素（已转换为EPSG:2326），可以是Feature或FeatureCollection
+        grid_result: 网格数据数组，每行包含 [网格ID, 中心x坐标, 中心y坐标, 半边长]
+        
+    Returns:
+        list: 与线要素相交的网格ID列表
+    """
+    if not feature_json:
+        return []
+    
+    # 检查是否是FeatureCollection
+    if feature_json.get('type') == 'FeatureCollection':
+        print("处理FeatureCollection中的多个Feature")
+        features = feature_json.get('features', [])
+        all_intersecting_grid_ids = []
+        
+        # 处理FeatureCollection中的每个Feature
+        for feature in features:
+            intersecting_grid_ids = get_grids_intersecting_with_line(feature, grid_result)
+            all_intersecting_grid_ids.extend(intersecting_grid_ids)
+        
+        # 去重
+        return list(set(all_intersecting_grid_ids))
+    
+    # 处理单个Feature
+    if 'geometry' not in feature_json:
+        return []
+    
+    geometry = feature_json['geometry']
+    geom_type = geometry.get('type', '').lower()
+    coordinates = geometry.get('coordinates', [])
+    
+    # 只处理LineString或MultiLineString几何类型
+    if geom_type != 'linestring' and geom_type != 'multilinestring':
+        logger.warning(f"几何类型 {geom_type} 不是线要素，无法计算相交的网格")
+        return []
+    
+    intersecting_grid_ids = []
+    
+    # 处理所有线段
+    line_segments = []
+    if geom_type == 'linestring':
+        # 单线，将所有相邻点对构成线段
+        print(len(coordinates)-1)
+        for i in range(len(coordinates) - 1):
+            line_segments.append((coordinates[i], coordinates[i + 1]))
+    elif geom_type == 'multilinestring':
+        # 多线，每条线都需要处理
+        for line in coordinates:
+            for i in range(len(line) - 1):
+                line_segments.append((line[i], line[i + 1]))
+    
+    # 遍历所有网格，检查是否与任何线段相交
+    for grid_row in grid_result:
+        if len(grid_row) < 4:
+            continue
+        
+        grid_id = int(grid_row[0])
+        grid_center_x = float(grid_row[1])
+        grid_center_y = float(grid_row[2])
+        half_size = float(grid_row[3])
+        
+        # 计算网格的四个顶点
+        min_x = grid_center_x - half_size
+        max_x = grid_center_x + half_size
+        min_y = grid_center_y - half_size
+        max_y = grid_center_y + half_size
+        
+        # 网格的四条边
+        grid_edges = [
+            ((min_x, min_y), (max_x, min_y)),  # 下边
+            ((max_x, min_y), (max_x, max_y)),  # 右边
+            ((max_x, max_y), (min_x, max_y)),  # 上边
+            ((min_x, max_y), (min_x, min_y))   # 左边
+        ]
+        
+        # 检查线段是否与网格相交
+        for line_segment in line_segments:
+            line_p1, line_p2 = line_segment
+            line_x1, line_y1 = line_p1
+            line_x2, line_y2 = line_p2
+            
+            # 检查线段是否完全在网格外部
+            if (max(line_x1, line_x2) < min_x or
+                min(line_x1, line_x2) > max_x or
+                max(line_y1, line_y2) < min_y or
+                min(line_y1, line_y2) > max_y):
+                continue
+            
+            # 检查线段端点是否在网格内部
+            if (min_x <= line_x1 <= max_x and min_y <= line_y1 <= max_y) or \
+               (min_x <= line_x2 <= max_x and min_y <= line_y2 <= max_y):
+                intersecting_grid_ids.append(grid_id)
+                break
+            
+            # 检查线段是否与网格边界相交
+            for grid_edge in grid_edges:
+                grid_p1, grid_p2 = grid_edge
+                grid_x1, grid_y1 = grid_p1
+                grid_x2, grid_y2 = grid_p2
+                
+                if do_line_segments_intersect(
+                    line_x1, line_y1, line_x2, line_y2,
+                    grid_x1, grid_y1, grid_x2, grid_y2
+                ):
+                    intersecting_grid_ids.append(grid_id)
+                    break
+            else:
+                # 如果与网格的所有边都不相交，继续检查下一个线段
+                continue
+            
+            # 如果已找到相交，跳出线段循环
+            break
+    
+    return intersecting_grid_ids
+
+def do_line_segments_intersect(x1: float, y1: float, x2: float, y2: float, 
+                              x3: float, y3: float, x4: float, y4: float) -> bool:
+    """
+    检查两条线段是否相交
+    
+    Args:
+        x1, y1: 第一条线段的起点
+        x2, y2: 第一条线段的终点
+        x3, y3: 第二条线段的起点
+        x4, y4: 第二条线段的终点
+        
+    Returns:
+        bool: True表示线段相交，False表示不相交
+    """
+    # 计算方向
+    def direction(x1, y1, x2, y2, x3, y3):
+        return (x3 - x1) * (y2 - y1) - (x2 - x1) * (y3 - y1)
+    
+    # 检查点是否在线段上
+    def on_segment(x1, y1, x2, y2, x3, y3):
+        return (min(x1, x2) <= x3 <= max(x1, x2) and 
+                min(y1, y2) <= y3 <= max(y1, y2))
+    
+    # 计算方向值
+    d1 = direction(x3, y3, x4, y4, x1, y1)
+    d2 = direction(x3, y3, x4, y4, x2, y2)
+    d3 = direction(x1, y1, x2, y2, x3, y3)
+    d4 = direction(x1, y1, x2, y2, x4, y4)
+    
+    # 线段相交的一般情况
+    if ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and \
+       ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)):
+        return True
+    
+    # 处理共线或端点在另一条线段上的情况
+    if d1 == 0 and on_segment(x3, y3, x4, y4, x1, y1):
+        return True
+    if d2 == 0 and on_segment(x3, y3, x4, y4, x2, y2):
+        return True
+    if d3 == 0 and on_segment(x1, y1, x2, y2, x3, y3):
+        return True
+    if d4 == 0 and on_segment(x1, y1, x2, y2, x4, y4):
+        return True
+    
+    return False
+
+def apply_transfer_water_action(transfer_water_params: TransferWaterParams, model_data: dict, watergroups: list, grid_result: np.ndarray = None) -> list:
 
     logger.info("开始应用调水")
     ne_data: NeData = model_data.get('ne', {})
     
+    # 处理调水源头
     from_grid = transfer_water_params.from_grid
-    if isinstance(transfer_water_params.from_grid, list) and len(transfer_water_params.from_grid) >= 2:
+    if isinstance(from_grid, dict):  # 如果是GeoJSON Feature或FeatureCollection
+        # 转换坐标系
+        from_grid_feature = transform_feature_4326_to_2326(from_grid)
+        # 查找对应的网格ID（优先使用grid_result）
+        from_grid_ids = find_grid_for_feature_point(from_grid_feature, ne_data, grid_result)
+        if from_grid_ids:
+            from_grid = from_grid_ids[0]  # 取第一个匹配的网格ID
+            logger.info(f"调水源头Feature点对应网格ID: {from_grid}")
+    elif isinstance(from_grid, list) and len(from_grid) >= 2:  # 如果是坐标点 [lon, lat]
         transformed_from_grid = transform_point_list_4326_to_2326(from_grid)
-        from_grid_id = find_grid_for_point(transformed_from_grid[0], transformed_from_grid[1], ne_data)
+        # 优先使用grid_result查找
+        from_grid_id = None
+        if grid_result is not None:
+            from_grid_id = find_grid_for_point_using_grid_result(transformed_from_grid[0], transformed_from_grid[1], grid_result)
+        if from_grid_id is None:  # 如果使用grid_result找不到，回退到使用ne_data
+            from_grid_id = find_grid_for_point(transformed_from_grid[0], transformed_from_grid[1], ne_data)
         if from_grid_id is not None:
             from_grid = from_grid_id
-            logger.info(f"调水源头坐标点 {transfer_water_params.from_grid} (4326) -> {transformed_from_grid} (2326) 对应网格ID: {from_grid}")
+            logger.info(f"调水源头坐标点 {from_grid} (4326) -> {transformed_from_grid} (2326) 对应网格ID: {from_grid}")
     
+    # 处理调水终点
     to_grid = transfer_water_params.to_grid
-    if isinstance(transfer_water_params.to_grid, list) and len(transfer_water_params.to_grid) >= 2:
+    if isinstance(to_grid, dict):  # 如果是GeoJSON Feature或FeatureCollection
+        # 转换坐标系
+        to_grid_feature = transform_feature_4326_to_2326(to_grid)
+        # 查找对应的网格ID（优先使用grid_result）
+        to_grid_ids = find_grid_for_feature_point(to_grid_feature, ne_data, grid_result)
+        if to_grid_ids:
+            to_grid = to_grid_ids[0]  # 取第一个匹配的网格ID
+            logger.info(f"调水终点Feature点对应网格ID: {to_grid}")
+    elif isinstance(to_grid, list) and len(to_grid) >= 2:  # 如果是坐标点 [lon, lat]
         transformed_to_grid = transform_point_list_4326_to_2326(to_grid)
-        to_grid_id = find_grid_for_point(transformed_to_grid[0], transformed_to_grid[1], ne_data)
+        # 优先使用grid_result查找
+        to_grid_id = None
+        if grid_result is not None:
+            to_grid_id = find_grid_for_point_using_grid_result(transformed_to_grid[0], transformed_to_grid[1], grid_result)
+        if to_grid_id is None:  # 如果使用grid_result找不到，回退到使用ne_data
+            to_grid_id = find_grid_for_point(transformed_to_grid[0], transformed_to_grid[1], ne_data)
         if to_grid_id is not None:
             to_grid = to_grid_id
-            logger.info(f"调水终点坐标点 {transfer_water_params.to_grid} (4326) -> {transformed_to_grid} (2326) 对应网格ID: {to_grid}")
+            logger.info(f"调水终点坐标点 {to_grid} (4326) -> {transformed_to_grid} (2326) 对应网格ID: {to_grid}")
     
     watergroup = {
         'from_grid': from_grid,

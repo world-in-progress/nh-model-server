@@ -5,6 +5,7 @@ __pycache__
 *$py.class
 .temp/
 test/
+temp/
 
 # C extensions
 *.so

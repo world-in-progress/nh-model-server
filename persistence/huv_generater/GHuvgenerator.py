@@ -876,8 +876,8 @@ def huv_generator(result_file, output_path, grid_result, bbox):
     merged_result, merged_header = merge_with_result_data(grid_result, result_file)
 
     dataset, pixel_size = create_tiled_datasets(merged_result, bbox=bbox)
-    dataset_M = reproject_dataset(dataset)
-    save_gdal_dataset_to_tif(dataset_M, output_path)
+    # dataset_M = reproject_dataset(dataset)
+    # save_gdal_dataset_to_tif(dataset_M, output_path)
 
     # 对数据集进行下采样
     downsampled_dataset0 = downsample_dataset(dataset, pixel_size, target_resolution=20, no_data_value=-9999)
@@ -900,9 +900,9 @@ def huv_generator(result_file, output_path, grid_result, bbox):
     if dataset is not None:
         dataset.FlushCache()
         dataset = None
-    if dataset_M is not None:
-        dataset_M.FlushCache()
-        dataset_M = None
+    # if dataset_M is not None:
+    #     dataset_M.FlushCache()
+    #     dataset_M = None
         
     with open(f"{output_path}/render.done", 'w', encoding='utf-8', newline='') as f:
         f.write('done')

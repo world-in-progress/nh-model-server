@@ -63,6 +63,7 @@ class Simulation(ISimulation):
             self.solution_path / 'env' / self.model_env.get('ns', '')
         )
         self.grid_result = grid_result
+        self.header = header
         self.bbox = bbox
 
     def run(self) -> bool:
@@ -78,13 +79,16 @@ class Simulation(ISimulation):
                 if not self.paused:
                     self.model_data = self._parse_data()
 
-                    # path1 = self.solution_path / 'test' / 'model_input_data.txt'
-                    # ne_data = self.model_data.get('ne', {})
-                    # ze_list = ne_data.ze_list
-                    # under_suf_list = ne_data.under_suf_list
-                    # with open(path1, 'w', encoding='utf-8') as f:
-                    #     for item in zip(ze_list, under_suf_list):
-                    #         f.write(f"{item[0]},{item[1]}\n")
+                    test_path = self.solution_path / 'test'
+                    test_path.mkdir(parents=True, exist_ok=True)
+
+                    path1 = test_path / 'model_input_data.txt'
+                    ne_data = self.model_data.get('ne', {})
+                    ze_list = ne_data.ze_list
+                    under_suf_list = ne_data.under_suf_list
+                    with open(path1, 'w', encoding='utf-8') as f:
+                        for item in zip(ze_list, under_suf_list):
+                            f.write(f"{item[0]},{item[1]}\n")
 
                     # 如果有初始人类行为数据，则解析并更新模型输入数据
                     initial_human_action_path = self.solution_path / 'actions' / 'human_actions'
@@ -92,13 +96,13 @@ class Simulation(ISimulation):
                         print(f"找到初始人类行为数据: {initial_human_action_path}")
                         self._update_data(str(initial_human_action_path))
 
-                    # path2 = self.solution_path / 'test' / 'model_input_data_updated.txt'
-                    # ne_data_updated = self.model_data.get('ne', {})
-                    # ze_list_updated = ne_data_updated.ze_list
-                    # under_suf_list_updated = ne_data_updated.under_suf_list
-                    # with open(path2, 'w', encoding='utf-8') as f:
-                    #     for item in zip(ze_list_updated, under_suf_list_updated):
-                    #         f.write(f"{item[0]},{item[1]}\n")
+                    path2 = test_path / 'model_input_data_updated.txt'
+                    ne_data_updated = self.model_data.get('ne', {})
+                    ze_list_updated = ne_data_updated.ze_list
+                    under_suf_list_updated = ne_data_updated.under_suf_list
+                    with open(path2, 'w', encoding='utf-8') as f:
+                        for item in zip(ze_list_updated, under_suf_list_updated):
+                            f.write(f"{item[0]},{item[1]}\n")
 
                     if self.model_data is None:
                         print("警告: 初始数据解析失败")
@@ -111,6 +115,7 @@ class Simulation(ISimulation):
                 )
                 self.monitor_thread.start()
                 print(f"模拟 {self.solution_node_key}_{self.simulation_node_key} 监控线程已启动")
+                print(f"当前监控的模拟step: {self.current_simulation_step}, 渲染step: {self.current_render_step}")
                 return True
         except Exception as e:
             print(f"启动模拟时出错: {e}")
@@ -145,7 +150,12 @@ class Simulation(ISimulation):
             # 清空model_data
             self.model_data = None
             print("model_data已清空")
-            
+
+            self.current_simulation_step = 1
+            self.current_render_step = 1
+            self.rendering_step = 0
+            self.max_step = 0
+
             print(f"模拟 {self.solution_node_key}_{self.simulation_node_key} 已停止")
             return True
         
@@ -246,7 +256,7 @@ class Simulation(ISimulation):
                 if action_type == ActionType.ADD_FENCE:
                     self.model_data = apply_add_fence_action(FenceParams(**params), self.model_data)
                 elif action_type == ActionType.ADD_GATE:
-                    self.model_data = apply_add_gate_action(GateParams(**params), self.model_data)
+                    self.model_data = apply_add_gate_action(GateParams(**params), self.model_data, self.grid_result)
                 elif action_type == ActionType.TRANSFER_WATER:
                     self.watergroups = apply_transfer_water_action(TransferWaterParams(**params),  self.model_data, self.watergroups)
                 else:
@@ -552,9 +562,9 @@ class Simulation(ISimulation):
                 return None
                 
             # 检查.done文件是否存在
-            done_file = os.path.join(step_dir, f'{step_name}.done')
+            done_file = os.path.join(step_dir, 'render', 'render.done')
             if not os.path.exists(done_file):
-                print(f"step {step} 尚未完成")
+                print(f"step {step} 尚未完成渲染")
                 return None
             
             # 递归获取所有文件路径
@@ -599,7 +609,10 @@ class Simulation(ISimulation):
                         # 如果是JSON文件，尝试解析
                         if file_path.endswith('.json'):
                             try:
-                                result_data[file_key] = json.loads(content)
+                                result_data[file_key] = {
+                                    'type': 'text',
+                                    'content': json.loads(content)
+                                }
                             except json.JSONDecodeError:
                                 # JSON解析失败，当作普通文本处理
                                 result_data[file_key] = {
